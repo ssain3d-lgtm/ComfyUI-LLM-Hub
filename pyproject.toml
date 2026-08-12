@@ -1,0 +1,18 @@
+[project]
+name = "comfyui-llm-hub"
+description = "Pick an LLM backend (LM Studio / Claude Code / Codex / Gemini) and generate text inside ComfyUI, with a live monitor on the node."
+version = "1.1.0"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = ["requests"]
+readme = "README.md"
+
+[project.urls]
+Repository = "https://github.com/ssain3d-lgtm/ComfyUI-LLM-Hub"
+
+[tool.comfy]
+# PublisherId 는 계정마다 다릅니다. Comfy Registry 에 로그인해
+# https://registry.comfy.org 에서 확인한 값을 넣으세요. 비워 두면 publish 가 거부됩니다.
+PublisherId = ""
+DisplayName = "ComfyUI-LLM-Hub"
+Icon = ""
