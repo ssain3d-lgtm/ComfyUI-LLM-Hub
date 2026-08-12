@@ -20,7 +20,7 @@ import time
 
 from ..utils.config import load_config
 from ..utils.proc import run_cli_stream
-from ..utils.proc import CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args, resolve_cli, run_cli
+from ..utils.proc import CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args, resolve_cli, screen_extra_args, run_cli
 from .base import (
     BaseBackend,
     LLMRequest,
@@ -130,7 +130,14 @@ class ClaudeCodeBackend(BaseBackend):
                 # 실측: --tools "" 가 내장 툴 전체를 끄는 공식 방법이다.
                 args += ["--tools", ""]
 
-            args += parse_extra_args(req.extra_args)
+            safe_extra, rejected = screen_extra_args(parse_extra_args(req.extra_args))
+            if rejected:
+                notes.append(
+                    "extra_args: 샌드박스를 푸는 위험 플래그를 차단했습니다 → "
+                    + " ".join(rejected)
+                    + " (필요하면 config.json 의 allow_unsafe_extra_args=true)"
+                )
+            args += safe_extra
 
             prompt = _build_prompt(req, staged)
             notes.append(unsupported_note("claude", "temperature", "max_tokens"))
@@ -210,14 +217,17 @@ class ClaudeCodeBackend(BaseBackend):
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
 
-        # 로그인/한도 문구는 종료 코드와 무관하게 먼저 본다.
-        if detect_login_error(stderr, stdout):
+        # 로그인/한도 판정은 진단 채널에만 건다.
+        # stdout 은 정상 종료 시 모델의 답변이므로 여기에 패턴 검사를 하면
+        # "429 가 뭐야?" 같은 질문의 정답이 rate_limited 로 오분류돼 버려진다.
+        diagnostic = stderr if code == 0 else (stderr + "\n" + stdout)
+        if detect_login_error(diagnostic):
             return LLMResponse(
                 status=LOGIN_HINT,
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
-        if detect_rate_limit(stderr, stdout):
+        if detect_rate_limit(diagnostic):
             return LLMResponse(
                 status="rate_limited",
                 duration_s=duration,

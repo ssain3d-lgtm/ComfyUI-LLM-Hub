@@ -188,12 +188,15 @@ def _extract_ffmpeg(path: str, max_frames: int, out_dir: str) -> tuple:
             return frames, f"video: ffmpeg 로 {len(frames)}장 추출 (길이 {duration:.1f}s)"
 
     # 길이를 못 구했으면 앞에서부터 초당 1장씩 뽑아 max_frames 로 자른다.
+    # ffmpeg image2 의 -start_number 기본값은 1 이므로 파일도 01 부터 생긴다.
+    # -start_number 0 을 명시해 00 부터 만들고, 수집도 00 부터 한다.
     pattern = os.path.join(out_dir, "llmhub_frame_%02d.png")
     try:
         result = _run(
             [
                 "ffmpeg", "-nostdin", "-y", "-i", path,
-                "-vf", "fps=1", "-frames:v", str(max_frames), "-q:v", "2", pattern,
+                "-vf", "fps=1", "-frames:v", str(max_frames),
+                "-start_number", "0", "-q:v", "2", pattern,
             ],
             timeout=300,
         )
@@ -204,10 +207,10 @@ def _extract_ffmpeg(path: str, max_frames: int, out_dir: str) -> tuple:
         tail = "\n".join((result.stderr or "").strip().splitlines()[-5:])
         return [], f"video: ffmpeg 프레임 추출 실패 — {tail}"
 
-    for index in range(max_frames):
-        dest = os.path.join(out_dir, f"llmhub_frame_{index:02d}.png")
-        if os.path.isfile(dest):
-            frames.append(os.path.abspath(dest))
+    # 실제로 만들어진 파일을 이름순으로 모은다(번호 시작점에 의존하지 않는다).
+    for name in sorted(os.listdir(out_dir)):
+        if name.startswith("llmhub_frame_") and name.endswith(".png"):
+            frames.append(os.path.abspath(os.path.join(out_dir, name)))
     return frames, f"video: ffmpeg 로 {len(frames)}장 추출 (초당 1장)"
 
 
@@ -255,6 +258,13 @@ def extract_frames(path: str, max_frames: int = 8, out_dir: str = "") -> tuple:
     max_frames = max(1, int(max_frames))
     out_dir = out_dir or os.path.join(os.path.dirname(path), "_llmhub_frames")
     os.makedirs(out_dir, exist_ok=True)
+    # 이전 실행(다른 영상)의 프레임이 섞이지 않게 먼저 비운다.
+    for name in os.listdir(out_dir):
+        if name.startswith("llmhub_frame_") and name.endswith(".png"):
+            try:
+                os.remove(os.path.join(out_dir, name))
+            except OSError:
+                pass
 
     extractor = find_extractor()
     if extractor == "ffmpeg":

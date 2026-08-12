@@ -12,6 +12,7 @@
     "gemini_approval_mode": "plan",
     "claude_system_prompt_mode": "append"
   },
+  "allow_unsafe_extra_args": false,
   "tool_loop_max_iters": 8,
   "max_file_read_bytes": 262144
 }

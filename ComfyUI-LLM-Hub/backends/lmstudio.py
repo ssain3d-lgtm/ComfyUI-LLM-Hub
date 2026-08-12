@@ -248,9 +248,11 @@ class LMStudioBackend(BaseBackend):
         deadline = time.time() + req.timeout_s
 
         text = ""
+        timed_out = False
         for raw in resp.iter_lines(decode_unicode=True):
             if time.time() > deadline:
                 resp.close()
+                timed_out = True
                 req.emitter.set_status(f"timeout({req.timeout_s}s) — 받은 부분까지만 사용")
                 break
             if not raw:
@@ -270,7 +272,7 @@ class LMStudioBackend(BaseBackend):
                 if piece:
                     text += piece
                     req.emitter.append(piece)
-        return resp, text
+        return resp, text, timed_out
 
     def _run_loop(self, req: LLMRequest, messages: list, model: str):
         """툴 루프 (DESIGN §8.1). 반환: (text, debug_notes) 또는 (LLMResponse, notes)."""
@@ -288,8 +290,18 @@ class LMStudioBackend(BaseBackend):
             payload = self._build_payload(req, messages, model)
 
             if streaming:
-                resp, streamed = self._stream_chat(req, payload)
+                resp, streamed, timed_out = self._stream_chat(req, payload)
                 if streamed is not None:
+                    if timed_out:
+                        # 다른 백엔드와 마찬가지로 잘린 응답은 ok 로 위장하지 않는다.
+                        return (
+                            LLMResponse(
+                                text=streamed.strip(),
+                                status=f"error: timeout({req.timeout_s}s) — 받은 부분까지만 반환",
+                                raw_debug="lmstudio: 스트리밍 도중 시간 초과",
+                            ),
+                            notes,
+                        )
                     return streamed, notes
                 # 200 이 아니면 아래 비스트리밍 경로가 오류/모델 폴백을 처리한다.
                 streaming = False

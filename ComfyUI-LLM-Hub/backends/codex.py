@@ -23,7 +23,7 @@ import time
 
 from ..utils.proc import (
     CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args,
-    resolve_cli, run_cli, run_cli_stream,
+    resolve_cli, run_cli, run_cli_stream, screen_extra_args,
 )
 from .base import (
     BaseBackend,
@@ -91,7 +91,14 @@ class CodexBackend(BaseBackend):
             if req.mcp_config:
                 notes.append("codex: 비대화형 MCP 승인 이슈로 v1 미지원")
 
-            args += parse_extra_args(req.extra_args)
+            safe_extra, rejected = screen_extra_args(parse_extra_args(req.extra_args))
+            if rejected:
+                notes.append(
+                    "extra_args: 샌드박스를 푸는 위험 플래그를 차단했습니다 → "
+                    + " ".join(rejected)
+                    + " (필요하면 config.json 의 allow_unsafe_extra_args=true)"
+                )
+            args += safe_extra
 
             # 프롬프트는 항상 stdin 으로 전달한다 ('-' = stdin 을 지시문으로 사용).
             args += ["-"]
@@ -138,13 +145,16 @@ class CodexBackend(BaseBackend):
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
 
-        if detect_login_error(stderr, stdout):
+        # stdout 은 정상 종료 시 모델 답변이므로 오류 패턴 검사에서 제외한다
+        # (claude_code.py 의 오분류 사례와 동일한 이유).
+        diagnostic = stderr if code == 0 else (stderr + "\n" + stdout)
+        if detect_login_error(diagnostic):
             return LLMResponse(
                 status=LOGIN_HINT,
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
-        if detect_rate_limit(stderr, stdout):
+        if detect_rate_limit(diagnostic):
             return LLMResponse(
                 status="rate_limited",
                 duration_s=duration,

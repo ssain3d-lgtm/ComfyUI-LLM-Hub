@@ -292,7 +292,7 @@ class TestGeminiBackend(unittest.TestCase):
             self._backend().generate(
                 LLMRequest("gemini", "", "", "설명해", image_paths=[png])
             )
-        self.assertIn("@sample.png", fake.stdin)
+        self.assertIn("@_llmhub_media/sample.png", fake.stdin)
 
     def test_auth_error_code_41(self):
         payload = json.dumps(

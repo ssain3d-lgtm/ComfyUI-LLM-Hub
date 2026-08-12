@@ -23,7 +23,7 @@ import time
 from ..utils.config import load_config
 from ..utils.proc import (
     CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args,
-    resolve_cli, run_cli, run_cli_stream,
+    resolve_cli, run_cli, run_cli_stream, screen_extra_args,
 )
 from .base import (
     BaseBackend,
@@ -91,7 +91,14 @@ class GeminiBackend(BaseBackend):
                     "gemini: mcp_config 는 전역 settings.json 사이드이펙트 때문에 v1 미적용"
                 )
 
-            args += parse_extra_args(req.extra_args)
+            safe_extra, rejected = screen_extra_args(parse_extra_args(req.extra_args))
+            if rejected:
+                notes.append(
+                    "extra_args: 샌드박스를 푸는 위험 플래그를 차단했습니다 → "
+                    + " ".join(rejected)
+                    + " (필요하면 config.json 의 allow_unsafe_extra_args=true)"
+                )
+            args += safe_extra
 
             # Gemini 는 비디오를 네이티브로 읽는다 → 파일 그대로 넘긴다.
             media = list(req.image_paths or []) + list(req.video_paths or [])
@@ -208,13 +215,15 @@ class GeminiBackend(BaseBackend):
                 raw_debug=truncate_debug(detail),
             )
 
-        if detect_login_error(stderr, stdout):
+        # stdout 은 정상 종료 시 모델 답변(또는 JSON)이므로 오류 패턴 검사에서 제외.
+        diagnostic = stderr if code == 0 else (stderr + "\n" + stdout)
+        if detect_login_error(diagnostic):
             return LLMResponse(
                 status=LOGIN_HINT,
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
-        if detect_rate_limit(stderr, stdout):
+        if detect_rate_limit(diagnostic):
             return LLMResponse(
                 status="rate_limited",
                 duration_s=duration,

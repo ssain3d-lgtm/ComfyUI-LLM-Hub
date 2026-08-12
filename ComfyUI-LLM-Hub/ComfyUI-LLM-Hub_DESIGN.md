@@ -482,3 +482,49 @@ CLIP Text Encode 로 넘어갈 **문자 그대로**를 봐야 하고, 렌더링�
      7. 재실행 시 이전 결과가 남아 현재 결과처럼 보였다 → execution_start 에서 초기화.
      8. 예외 경로에서 emitter.finish() 를 안 해 "생성 중..." 으로 멈춰 있었다.
      9. SSE 타임아웃 (17.1 참조), 10. javascript: 링크 (17.2 참조). -->
+
+
+---
+
+## 18. 2차 리뷰(code-review + security-review) 수정
+
+<!-- 수정: Fable 5 세션에서 code-review(high)와 security-review 스킬을 다시 돌려
+     발견한 8+1건을 모두 고쳤다. -->
+
+### 보안 (security-review)
+
+- **[HIGH] extra_args 샌드박스 무력화 (RCE 표면).** 각 CLI 백엔드는 읽기 전용을
+  강제하는데(claude `--tools ""`, codex `-s read-only`, gemini `--approval-mode plan`),
+  사용자 `extra_args` 가 그 뒤에 붙어 `--dangerously-skip-permissions --allowedTools Bash`
+  (claude), `-s danger-full-access`(codex), `--yolo`(gemini) 로 잠금을 풀 수 있었다.
+  ComfyUI 를 `--listen` 으로 LAN 에 열면 원격 워크플로우가 호스트 셸을 얻는다.
+  → `utils/proc.py:screen_extra_args` 로 위험 플래그(및 그 값)를 차단.
+     접두사 마커(`--dangerously*`)와 정확 마커(값 페어링 포함)를 구분한다.
+     `config.json` 의 `allow_unsafe_extra_args=true` 로만 열 수 있다(기본 차단).
+- 그 외 표면은 안전 판정: JS 마크다운 렌더러(escapeHtml 선행 + 링크 스킴 화이트리스트),
+  fs_tools 경로 검증, api_token 미노출, stream.py 페이로드.
+
+### 정확성 (code-review)
+
+- **오류 오분류(claude/codex/gemini).** stdout 은 정상 종료 시 모델 답변인데
+  detect_login/rate_limit 를 stdout 에도 걸어, "429 가 뭐야?" 같은 질문의 정답이
+  rate_limited 로 오분류돼 버려졌다. → 진단은 stderr(항상) + stdout(비정상 종료 시만).
+- **프로세스 트리 kill.** Windows .cmd 셔틀은 proc.kill() 로 cmd 만 죽고 node.exe 가
+  남는다. → taskkill /T 로 트리 전체 정리.
+- **video_io fps 폴백 off-by-one + 스테일 프레임.** ffmpeg image2 는 01 부터 저장하는데
+  00 부터 수집해 마지막 프레임을 놓치고, 이전 영상 프레임이 섞였다.
+  → 추출 전 폴더 비우기 + `-start_number 0` + 실제 파일 이름순 수집.
+- **stage_media 파괴적 덮어쓰기.** cwd 에 동명의 사용자 파일이 있으면 덮어썼다.
+  → 전용 `_llmhub_media/` 하위로 격리.
+- **lmstudio 스트리밍 타임아웃 status=ok.** 잘린 응답을 성공으로 위장했다 → error 로.
+- **VALIDATE_INPUTS 과잉 우회.** `**kwargs` 는 모든 입력 검증을 끈다 →
+  `lmstudio_model` 만 명시해 우회 범위를 좁혔다.
+- **다중 비디오 프레임 클로버.** 영상별 `_llmhub_frames_{i}/` 로 격리.
+- **posix shlex.** 리눅스/맥에서 posix=False 는 따옴표를 argv 에 남긴다 → 플랫폼 분기.
+
+### 실사용성
+
+- 20개 위젯 전부에 한국어 tooltip 추가.
+- `lmstudio_*` 위젯은 backend=lmstudio 일 때만 표시(web JS 토글).
+- 실사용 시나리오 검증: 이미지 프롬프트 생성 / file_access 폴더 미입력 /
+  없는 폴더 / 위험 플래그 입력 — 모두 명확한 한국어 status 로 안내.

@@ -76,7 +76,9 @@ pip 의존성은 **`requests` 하나**입니다.
 | `image` *(옵션)* | ComfyUI IMAGE |
 | `video` / `video_path` *(옵션)* | ComfyUI VIDEO 입력 또는 비디오 파일 경로 |
 | `mcp_config` *(옵션)* | MCP 설정 JSON 파일 경로 (claude만 실제 적용) |
-| `extra_args` *(옵션)* | CLI에 그대로 덧붙일 원시 플래그 |
+| `extra_args` *(옵션)* | CLI에 덧붙일 원시 플래그(고급). **샌드박스를 푸는 위험 플래그는 자동 차단** |
+
+> 각 입력 위에 마우스를 올리면 한국어 설명(툴팁)이 나옵니다. `lmstudio_*` 위젯은 backend가 `lmstudio`일 때만 보입니다.
 
 출력은 `text`(생성된 텍스트) / `status`(`ok`, `error: ...`, `rate_limited`) / `debug`(원시 응답·진단)입니다.
 `status`가 `ok`가 아니어도 노드는 예외를 던지지 않고 빈 `text`와 함께 이유를 돌려줍니다.
@@ -218,6 +220,7 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
     `append` 모드에서는 기본 프롬프트가 강해서 "영어로만 답해" 같은 지시가 희석되는 것을 실측으로 확인했습니다.
 - `lmstudio.ttl_sec` / `lmstudio.unload_after`: **노드 위젯의 기본값**이 됩니다. 개별 실행은 위젯 값이 우선합니다.
 - `cli_paths.lms`: LM Studio CLI 경로. 즉시 VRAM 해제에 씁니다.
+- `allow_unsafe_extra_args`(기본 `false`): `extra_args`로 읽기 전용 잠금을 푸는 위험 플래그(`--dangerously-*`, `--allowedTools Bash`, `-s danger-full-access`, `--yolo` 등)를 허용할지. **기본은 차단**입니다. 꼭 필요할 때만 `true`로 여세요.
 - `api_token` 같은 비밀값은 `debug` 출력에 절대 포함되지 않습니다.
 
 ---

@@ -199,7 +199,11 @@ def stage_media(paths, cwd: str) -> list:
             if real == root or real.startswith(root + os.sep):
                 staged.append(os.path.relpath(real, root))
                 continue
-            dest = os.path.join(root, os.path.basename(real))
+            # cwd 안에 같은 이름의 다른 파일이 이미 있으면 덮어쓰지 않는다
+            # (사용자의 원본 파일 파괴 방지). 전용 하위 폴더에 넣는다.
+            media_dir = os.path.join(root, "_llmhub_media")
+            os.makedirs(media_dir, exist_ok=True)
+            dest = os.path.join(media_dir, os.path.basename(real))
             if os.path.realpath(dest) != real:
                 shutil.copyfile(real, dest)
             staged.append(os.path.relpath(dest, root))
@@ -216,8 +220,10 @@ def frames_for_unsupported_video(req: LLMRequest, backend_name: str, out_dir: st
     from ..utils import video_io
 
     frames, notes = [], []
-    for path in req.video_paths or []:
-        target_dir = out_dir or os.path.join(os.path.dirname(path), "_llmhub_frames")
+    for index, path in enumerate(req.video_paths or []):
+        base_dir = out_dir or os.path.dirname(path)
+        # 영상마다 별도 폴더에 뽑아 서로의 프레임을 덮어쓰지 않게 한다.
+        target_dir = os.path.join(base_dir, f"_llmhub_frames_{index}")
         extracted, message = video_io.extract_frames(path, req.video_max_frames, target_dir)
         if message:
             notes.append(f"{backend_name}: 비디오 미지원 → {message}")

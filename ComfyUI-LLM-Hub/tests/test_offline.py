@@ -266,8 +266,9 @@ class TestProcHelpers(unittest.TestCase):
     def test_extra_args_parsing(self):
         self.assertEqual(proc.parse_extra_args(""), [])
         self.assertEqual(proc.parse_extra_args("--foo bar"), ["--foo", "bar"])
-        # Windows 경로의 역슬래시가 살아있어야 한다 (posix=False).
-        self.assertIn("C:\\tmp", proc.parse_extra_args("--dir C:\\tmp"))
+        # Windows 에서만 역슬래시 경로가 보존된다(posix=False). 리눅스/맥은 posix=True.
+        if sys.platform == "win32":
+            self.assertIn("C:\\tmp", proc.parse_extra_args("--dir C:\\tmp"))
 
     def test_missing_cli_raises(self):
         with self.assertRaises(proc.CliNotFoundError):

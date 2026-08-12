@@ -195,6 +195,40 @@ function viewMode(node) {
   return widget ? widget.value : "plain";
 }
 
+// backend 값에 따라 lmstudio 전용 위젯을 보이거나 숨긴다.
+// (ComfyUI 위젯 숨김 관용구: type 을 바꾸고 computeSize 를 0 으로)
+const LMSTUDIO_ONLY = ["lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after"];
+
+function setupBackendToggle(node) {
+  const backendWidget = node.widgets?.find((w) => w.name === "backend");
+  if (!backendWidget) return;
+
+  const apply = () => {
+    const isLm = backendWidget.value === "lmstudio";
+    for (const name of LMSTUDIO_ONLY) {
+      const w = node.widgets?.find((x) => x.name === name);
+      if (!w) continue;
+      if (w._llmhubType === undefined) w._llmhubType = w.type;
+      if (isLm) {
+        w.type = w._llmhubType;
+        w.computeSize = undefined;
+      } else {
+        w.type = "hidden";
+        w.computeSize = () => [0, -4];
+      }
+    }
+    node.setDirtyCanvas?.(true, true);
+  };
+
+  const previous = backendWidget.callback;
+  backendWidget.callback = function () {
+    const r = previous?.apply(this, arguments);
+    apply();
+    return r;
+  };
+  apply();
+}
+
 // --------------------------------------------------------------------------
 // 등록
 // --------------------------------------------------------------------------
@@ -247,6 +281,9 @@ app.registerExtension({
           return previous?.apply(this, arguments);
         };
       }
+
+      // backend 가 lmstudio 일 때만 lmstudio_* 위젯을 보인다(잡음 감소).
+      setupBackendToggle(this);
 
       this.size[1] = Math.max(this.size[1], 460);
       return result;

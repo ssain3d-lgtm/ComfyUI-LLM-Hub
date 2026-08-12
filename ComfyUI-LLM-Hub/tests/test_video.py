@@ -157,7 +157,7 @@ class TestBackendVideoRouting(unittest.TestCase):
             )
             resp = backend.generate(self._req("gemini"))
         self.assertEqual(resp.status, "ok")
-        self.assertIn("@sample_video.mp4", fake.stdin)
+        self.assertIn("@_llmhub_media/sample_video.mp4", fake.stdin)
         self.assertIn("네이티브", resp.raw_debug)
 
     def test_claude_converts_video_to_frames(self):

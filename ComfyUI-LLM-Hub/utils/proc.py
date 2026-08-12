@@ -62,24 +62,102 @@ def _creation_flags() -> int:
     return 0
 
 
+# 읽기 전용 샌드박스를 푸는 위험 플래그. extra_args 로 들어오면 거부한다.
+# (claude Bash 툴 허용 / codex 샌드박스 해제 / gemini yolo 등 → LAN 노출 시 RCE 표면)
+# 접두사 마커: 뒤에 무엇이 붙든 차단 (--dangerously-skip-permissions 등)
+_UNSAFE_PREFIX_MARKERS = ("--dangerously",)
+# 정확 마커: 플래그가 정확히 일치하거나 --flag=value 형태면 차단하고,
+#           "--flag value" 형태면 뒤따르는 값 토큰도 함께 버린다.
+_UNSAFE_EXACT_MARKERS = (
+    "--allowedtools", "--allowed-tools", "--tools",
+    "--disallowedtools", "--disallowed-tools", "--permission-mode",
+    "--sandbox", "-s", "--approval-mode", "--yolo", "-y",
+    "--add-dir", "--mcp-config", "--agents", "--agent",
+    "--setting", "--settings", "-c", "--config", "--enable",
+)
+
+
+def screen_extra_args(tokens: list) -> tuple:
+    """위험 플래그를 걸러낸다. 반환: (안전한 토큰, 거부된 토큰).
+
+    개별 실행이 노드가 강제한 읽기 전용 잠금을 스스로 풀지 못하게 한다.
+    꼭 필요하면 config.json 의 allow_unsafe_extra_args=true 로 열 수 있다(§보안).
+    """
+    from .config import load_config
+
+    if load_config().get("allow_unsafe_extra_args"):
+        return list(tokens), []
+
+    safe, rejected = [], []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        low = token.lower()
+
+        if any(low.startswith(m) for m in _UNSAFE_PREFIX_MARKERS):
+            rejected.append(token)
+            i += 1
+            continue
+
+        exact = low in _UNSAFE_EXACT_MARKERS
+        with_value = any(low.startswith(m + "=") for m in _UNSAFE_EXACT_MARKERS)
+        if exact or with_value:
+            rejected.append(token)
+            # "--flag value" 형태면 다음 토큰(값)도 함께 버린다.
+            # 단 다음 토큰이 또 다른 플래그(-)면 값이 아니므로 남긴다.
+            if exact and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
+                rejected.append(tokens[i + 1])
+                i += 2
+                continue
+            i += 1
+            continue
+
+        safe.append(token)
+        i += 1
+    return safe, rejected
+
+
 def parse_extra_args(extra_args: str) -> list:
     """extra_args 문자열을 argv 리스트로 파싱한다 (DESIGN §9).
 
-    Windows 경로의 역슬래시가 이스케이프로 먹히지 않도록 posix=False 를 쓴다.
+    Windows 에서만 posix=False (역슬래시 경로 보호). 리눅스/맥에서 posix=False 를
+    쓰면 따옴표가 argv 에 그대로 남는 문제가 있어 플랫폼으로 가른다.
     """
     if not extra_args or not extra_args.strip():
         return []
     try:
-        return shlex.split(extra_args, posix=False)
+        return shlex.split(extra_args, posix=(sys.platform != "win32"))
     except ValueError:
         return extra_args.split()
+
+
+def _kill_tree(proc) -> None:
+    """프로세스와 그 자식들을 함께 죽인다.
+
+    Windows 의 claude/codex/gemini 는 .cmd 셔틀이라 proc.kill() 은 cmd.exe 만
+    죽이고 실제 node.exe 는 살아남는다 → taskkill /T 로 트리 전체를 정리한다.
+    """
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=15, creationflags=_creation_flags(),
+            )
+            return
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
 
 
 def run_cli(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300):
     """CLI 를 실행하고 (exit_code, stdout, stderr, duration_s) 를 돌려준다.
 
     타임아웃이면 exit_code = -1, stderr 에 "error: timeout(Ns)" 를 채운다.
-    좀비 프로세스가 남지 않도록 kill 후 반드시 회수한다 (T5).
+    좀비 프로세스가 남지 않도록 트리 전체를 kill 후 반드시 회수한다 (T5).
     """
     started = time.time()
     proc = subprocess.Popen(
@@ -98,7 +176,7 @@ def run_cli(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300):
     try:
         stdout, stderr = proc.communicate(input=stdin_text, timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_tree(proc)
         try:
             # kill 후 파이프를 비워 좀비/파이프 잔류를 방지한다.
             stdout, stderr = proc.communicate(timeout=10)
@@ -193,7 +271,7 @@ def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 30
         proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
         timed_out = True
-        proc.kill()
+        _kill_tree(proc)
         try:
             proc.wait(timeout=10)
         except Exception:
