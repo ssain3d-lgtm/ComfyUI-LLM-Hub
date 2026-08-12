@@ -185,7 +185,26 @@ function createPanel(node) {
     getValue: () => "",
     setValue: () => {},
   });
-  widget.computeSize = (width) => [width, 180];
+  // options.serialize 만으로는 부족하다. litegraph 의 serialize()/configure() 는
+  // widget.serialize 를 본다(ComfyUI 자체 코드도 r.serialize=!1 을 따로 찍는다).
+  widget.serialize = false;
+  // 접힌 상태에서는 이 창이 노드의 주인공이다.
+  //
+  // 이 프론트엔드는 DOM 위젯 높이를 computeLayoutSize 로 잡는다(코어의 video DOM
+  // 위젯도 `computeLayoutSize = () => ({minHeight, minWidth})` 를 쓴다). computeSize
+  // 만 주면 무시돼서 패널이 엉뚱한 높이로 잡히고 위 위젯을 덮는다.
+  // 옛 프론트엔드는 computeSize 를 보므로 둘 다 둔다.
+  const PANEL_HEIGHT = 240;
+  widget.computeSize = (width) => [width, PANEL_HEIGHT];
+  widget.computeLayoutSize = () => ({ minHeight: PANEL_HEIGHT, minWidth: 200 });
+
+  // 이 위젯은 반드시 widgets 배열의 맨 끝에 있어야 한다.
+  //   serialize():  widgets_values[전체배열 인덱스] = 값   (건너뛴 자리에 구멍)
+  //   configure():  구멍을 무시하고 순서대로 읽는다        (압축해서 읽음)
+  // 둘이 어긋나 있어서, 직렬화되지 않는 위젯이 중간에 끼면 그 뒤 위젯 값이 전부
+  // 한 칸씩 밀린다. 맨 끝일 때만 구멍이 배열 끝이라 무해하다.
+  // → 모니터를 위로 올리고 싶으면 옮기지 말고 사이 위젯을 숨겨라.
+  control.widget = widget;
 
   return control;
 }
@@ -195,25 +214,75 @@ function viewMode(node) {
   return widget ? widget.value : "plain";
 }
 
-// backend 값에 따라 lmstudio 전용 위젯을 보이거나 숨긴다.
+// backend 값에 따라 그 백엔드가 실제로 쓰는 위젯만 보인다.
 // (ComfyUI 위젯 숨김 관용구: type 을 바꾸고 computeSize 를 0 으로)
-const LMSTUDIO_ONLY = ["lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after"];
+//
+// 어느 위젯이 어느 백엔드에 유효한지는 추측이 아니라 nodes.py 의 tooltip 이 근거다:
+//   temperature / max_tokens  "lmstudio 에만 적용, CLI 3종은 무시"
+//   mcp_config                "claude 만 실제 적용"
+//   video_max_frames          "claude/codex/lmstudio 만 해당(gemini 는 영상을 그대로 넘김)"
+//
+// 숨겨도 값은 그대로 직렬화된다(litegraph 는 위젯을 저장할 때 type 을 보지 않는다).
+// 그래서 required 위젯을 숨겨도 프롬프트에서 빠지지 않는다.
+const BACKEND_ONLY = {
+  claude_model: ["claude"],
+  lmstudio_model: ["lmstudio"],
+  lmstudio_ttl_sec: ["lmstudio"],
+  lmstudio_unload_after: ["lmstudio"],
+  temperature: ["lmstudio"],
+  max_tokens: ["lmstudio"],
+  mcp_config: ["claude"],
+  video_max_frames: ["lmstudio", "claude", "codex"],
+};
+
+// 접었을 때 숨는 위젯. 여기 없는 것 = 항상 보이는 것이다:
+//   backend / prompt / system_prompt / lmstudio_model
+// 모니터 창을 system_prompt 바로 밑으로 끌어올리는 방법이 이것뿐이다 —
+// DOM 위젯 자체는 위로 옮길 수 없다(createPanel 의 주석 참고).
+const ADVANCED = [
+  "model", "file_access", "workspace_dir", "temperature", "max_tokens",
+  "timeout_sec", "seed", "video_max_frames", "stream_view", "video_path",
+  "mcp_config", "extra_args", "lmstudio_ttl_sec", "lmstudio_unload_after",
+  // INPUT_TYPES 에 없는 이름이다. seed 에 control_after_generate:True 를 주면
+  // 프론트엔드가 짝꿍 위젯을 하나 더 만들어 붙인다. seed 만 숨기면 이게 홀로 남아
+  // "고급을 접었는데 웬 randomize 줄이 남아 있는" 모양이 된다.
+  "control_after_generate",
+];
+
+const SHOW_ADVANCED_PROP = "showAdvanced";
 
 function setupBackendToggle(node) {
   const backendWidget = node.widgets?.find((w) => w.name === "backend");
   if (!backendWidget) return;
 
+  // properties 는 이름으로 저장되므로 위젯 순서에 영향을 주지 않는다.
+  if (node.properties[SHOW_ADVANCED_PROP] === undefined) {
+    node.properties[SHOW_ADVANCED_PROP] = false;
+  }
+
   const apply = () => {
-    const isLm = backendWidget.value === "lmstudio";
-    for (const name of LMSTUDIO_ONLY) {
-      const w = node.widgets?.find((x) => x.name === name);
-      if (!w) continue;
+    const backend = backendWidget.value;
+    const showAdvanced = !!node.properties[SHOW_ADVANCED_PROP];
+
+    for (const w of node.widgets || []) {
+      if (w.name === "llmhub_monitor" || w.name === "backend") continue;
+      const backends = BACKEND_ONLY[w.name];
+      // 이 백엔드가 안 쓰는 위젯은 펼쳐도 안 보인다 — 펼침은 "고급"만 여는 것이지
+      // 무의미한 위젯까지 되살리는 게 아니다.
+      const usedByBackend = !backends || backends.includes(backend);
+      const visible = usedByBackend && (showAdvanced || !ADVANCED.includes(w.name));
+
       if (w._llmhubType === undefined) w._llmhubType = w.type;
-      if (isLm) {
+      if (visible) {
         w.type = w._llmhubType;
+        w.hidden = false;
         w.computeSize = undefined;
       } else {
+        // type 을 바꾸는 건 예전 관용구고, 지금 프론트엔드는 w.hidden 을 본다.
+        // 어느 쪽을 보는 버전인지 확인할 방법이 없어 둘 다 건다 — 한쪽만 걸면
+        // 위젯 종류에 따라 일부만 숨는 얼룩덜룩한 상태가 된다.
         w.type = "hidden";
+        w.hidden = true;
         w.computeSize = () => [0, -4];
       }
     }
@@ -226,6 +295,10 @@ function setupBackendToggle(node) {
     apply();
     return r;
   };
+  // 저장된 워크플로우를 열면 configure() 가 backend 값을 나중에 되돌려놓는데,
+  // 그때는 위젯 callback 이 불리지 않는다. onConfigure 에서 다시 부르지 않으면
+  // backend=claude 로 저장한 노드가 lmstudio 위젯을 펼친 채 열린다.
+  node._llmhubApplyBackendToggle = apply;
   apply();
 }
 
@@ -286,6 +359,29 @@ app.registerExtension({
       setupBackendToggle(this);
 
       this.size[1] = Math.max(this.size[1], 460);
+      return result;
+    };
+
+    // 위젯을 하나 더 만들지 않고 우클릭 메뉴로 접고 편다.
+    // 위젯을 추가하면 widgets_values 자리를 차지해 예전 워크플로우와 어긋난다.
+    const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
+    nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
+      const result = getExtraMenuOptions?.apply(this, arguments);
+      const shown = !!this.properties?.[SHOW_ADVANCED_PROP];
+      options.push({
+        content: shown ? "고급 옵션 접기" : "고급 옵션 펼치기",
+        callback: () => {
+          this.properties[SHOW_ADVANCED_PROP] = !shown;
+          this._llmhubApplyBackendToggle?.();
+        },
+      });
+      return result;
+    };
+
+    const onConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function () {
+      const result = onConfigure?.apply(this, arguments);
+      this._llmhubApplyBackendToggle?.();
       return result;
     };
 

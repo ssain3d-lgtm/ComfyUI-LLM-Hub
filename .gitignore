@@ -4,3 +4,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+
+# 토큰 파일은 절대 커밋하지 않는다 (내용 전체가 API 키다).
+lm_studio_token.txt

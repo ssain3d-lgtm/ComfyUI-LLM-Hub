@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import time
 from dataclasses import replace
 
 from ..utils import fs_tools
-from ..utils.config import load_config
+from ..utils.config import load_config, resolve_api_token
 from .base import (
     BaseBackend,
     LLMRequest,
@@ -37,7 +38,9 @@ class LMStudioBackend(BaseBackend):
         self.config = config or load_config()
         ls = self.config.get("lmstudio", {}) or {}
         self.base_url = (ls.get("base_url") or "http://127.0.0.1:1234").rstrip("/")
-        self.api_token = ls.get("api_token") or ""
+        # config.json 뿐 아니라 환경변수/토큰파일도 본다. 드롭다운만 고치고 여기를
+        # 두면 목록은 뜨는데 정작 생성이 401 로 죽는다 — 같은 토큰을 써야 한다.
+        self.api_token = resolve_api_token(self.config)
         self.default_model = ls.get("default_model") or ""
         self.max_iters = int(self.config.get("tool_loop_max_iters", 8) or 8)
         self.max_file_read_bytes = int(self.config.get("max_file_read_bytes", 262144) or 262144)
@@ -223,7 +226,13 @@ class LMStudioBackend(BaseBackend):
     def _stream_chat(self, req: LLMRequest, payload: dict):
         """SSE 스트리밍으로 토큰을 받아 모니터링 창에 흘린다.
 
-        반환: (resp, text) — 200 이 아니면 text 는 None 이라 호출부가 폴백한다.
+        반환: (resp, text, timed_out) — 200 이 아니면 text 는 None 이라 호출부가 폴백한다.
+
+        세 값을 꼭 다 돌려줘야 한다. 호출부가 `resp, streamed, timed_out = ...` 로
+        받으므로 오류 경로에서 두 개만 돌려주면 ValueError 로 죽는다. 그러면
+        "200 이 아니면 비스트리밍 경로가 모델 폴백을 처리한다" 는 설계가 아예
+        도달하지 못한다 — unload_after 기본값이 True 라 모델이 매번 내려가고,
+        다음 실행이 400 을 받는 이 경로는 일상적으로 밟힌다.
         """
         import requests
 
@@ -235,7 +244,7 @@ class LMStudioBackend(BaseBackend):
             timeout=req.timeout_s, stream=True,
         )
         if resp.status_code != 200:
-            return resp, None
+            return resp, None, False
 
         # SSE 응답에는 charset 이 없는 경우가 많은데, 그러면 requests 가
         # ISO-8859-1 로 디코딩해서 한글이 깨진다(테스트로 확인).
@@ -303,8 +312,10 @@ class LMStudioBackend(BaseBackend):
                             notes,
                         )
                     return streamed, notes
-                # 200 이 아니면 아래 비스트리밍 경로가 오류/모델 폴백을 처리한다.
-                streaming = False
+                # 200 이 아니면 아래가 오류/모델 폴백을 처리한다. streaming 은 끄지
+                # 않는다 — 여기서 꺼버리면 폴백 뒤 재시도가 비스트리밍으로 나가고
+                # 모니터 창이 빈 채로 끝난다. unload_after 기본값이 True 라 모델은
+                # 매 실행 뒤 내려가고, 그래서 이 경로가 일상적으로 밟힌다.
             else:
                 resp = self._post_chat(payload, req.timeout_s)
 
@@ -343,7 +354,14 @@ class LMStudioBackend(BaseBackend):
             tool_calls = message.get("tool_calls") or []
 
             if not tool_calls:
-                return message.get("content") or "", notes
+                content = message.get("content") or ""
+                if not content.strip():
+                    exhausted = self._reasoning_budget_error(
+                        choices[0], data.get("usage") or {}, req
+                    )
+                    if exhausted is not None:
+                        return exhausted, notes
+                return content, notes
 
             # 툴 호출 결과를 role="tool" 메시지로 붙여 재요청한다.
             messages.append(_assistant_tool_message(message, tool_calls))
@@ -368,6 +386,39 @@ class LMStudioBackend(BaseBackend):
 
         notes.append("tool loop limit")
         return last_text or "", notes
+
+    @staticmethod
+    def _reasoning_budget_error(choice: dict, usage: dict, req: LLMRequest):
+        """추론 토큰이 max_tokens 를 다 먹어 본문이 비었으면 그렇게 말해준다.
+
+        추론 모델(qwen3 계열 등)은 답을 쓰기 전에 숨겨진 reasoning 을 먼저 뱉는다.
+        그 분량도 max_tokens 에 포함되므로, 예산이 작으면 reasoning 만 하다가
+        잘리고 content 는 빈 문자열로 온다. 실측: max_tokens=256 일 때
+        reasoning_tokens=254, finish_reason="length", content="".
+
+        이때 "모델이 텍스트를 내지 않음" 이라고 하면 사용자는 모델이나 프롬프트를
+        의심하게 된다. 실제로 필요한 건 max_tokens 를 올리는 것뿐이다.
+        반환값: 오류 응답(해당하면) 또는 None.
+        """
+        if choice.get("finish_reason") != "length":
+            return None
+        details = usage.get("completion_tokens_details") or {}
+        reasoning = details.get("reasoning_tokens") or 0
+        if not reasoning:
+            return None
+        completion = usage.get("completion_tokens") or reasoning
+        return LLMResponse(
+            status=(
+                f"error: 추론 토큰이 max_tokens 를 다 썼습니다 "
+                f"(추론 {reasoning} / 한도 {completion} 토큰, 본문 0). "
+                f"max_tokens 를 올리세요 — 이 모델은 답을 쓰기 전에 숨은 추론을 먼저 "
+                f"하는데 그 분량도 max_tokens 에 들어갑니다."
+            ),
+            raw_debug=(
+                f"finish_reason=length reasoning_tokens={reasoning} "
+                f"completion_tokens={completion} max_tokens={req.max_tokens}"
+            ),
+        )
 
     def _map_exception(self, exc: Exception, started: float, debug_notes: list) -> LLMResponse:
         import requests
@@ -433,6 +484,21 @@ def _looks_like_model_error(status_code: int, body: str) -> bool:
 _MODEL_CACHE = {"at": 0.0, "ids": []}
 _MODEL_CACHE_TTL = 10.0  # 초. INPUT_TYPES 가 자주 불려도 서버를 계속 두드리지 않게.
 
+_LOGGER = logging.getLogger(__name__)
+_WARNED = set()
+
+
+def _warn_once(message: str):
+    """같은 경고를 한 번만 낸다.
+
+    INPUT_TYPES 는 /object_info 요청마다 불리므로 그대로 두면 콘솔이 같은 줄로
+    가득 찬다. 반대로 아예 안 내면 원인을 못 찾는다 — 그 사이를 잡는다.
+    """
+    if message in _WARNED:
+        return
+    _WARNED.add(message)
+    _LOGGER.warning("[LLM Hub] %s", message)
+
 
 def list_model_ids(timeout_s: float = 1.5) -> list:
     """LM Studio 에 있는 모델 id 목록을 돌려준다 (실패하면 빈 리스트).
@@ -448,14 +514,21 @@ def list_model_ids(timeout_s: float = 1.5) -> list:
         return list(_MODEL_CACHE["ids"])
 
     ids = []
+    problems = []
     try:
         import requests
 
-        cfg = load_config().get("lmstudio", {}) or {}
+        full_cfg = load_config()
+        cfg = full_cfg.get("lmstudio", {}) or {}
         base = (cfg.get("base_url") or "http://127.0.0.1:1234").rstrip("/")
         headers = {}
-        if cfg.get("api_token"):
-            headers["Authorization"] = f"Bearer {cfg['api_token']}"
+        token = resolve_api_token(full_cfg)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        # /v1/models 는 모델 종류를 알려주지 않는다. v0 이 임베딩이라고 알려준 id 를
+        # 여기 모아두지 않으면, 종류를 모르는 v1 결과를 합치면서 도로 살아난다.
+        excluded = set()
 
         for path, extract in (
             ("/api/v0/models", _ids_from_v0),
@@ -464,13 +537,31 @@ def list_model_ids(timeout_s: float = 1.5) -> list:
             try:
                 resp = requests.get(base + path, headers=headers, timeout=timeout_s)
                 if resp.status_code == 200:
-                    for model_id in extract(resp.json()):
-                        if model_id and model_id not in ids:
+                    payload = resp.json()
+                    if path == "/api/v0/models":
+                        excluded |= _embedding_ids(payload)
+                    for model_id in extract(payload):
+                        if model_id and model_id not in ids and model_id not in excluded:
                             ids.append(model_id)
-            except Exception:
+                else:
+                    # 상태 코드만 남긴다. 토큰은 어떤 경우에도 싣지 않는다 (DESIGN §10).
+                    problems.append(f"{path} HTTP {resp.status_code}")
+            except Exception as exc:
+                problems.append(f"{path} {type(exc).__name__}")
                 continue
-    except Exception:
+    except Exception as exc:
         ids = []
+        problems.append(type(exc).__name__)
+
+    if not ids and problems:
+        # 조용히 빈 목록을 돌려주면 사용자는 "드롭다운이 안 뜬다" 까지만 보이고
+        # 원인을 알 길이 없다. 실제로 이 증상을 찾는 데 라이브 probe 가 필요했다.
+        _warn_once(
+            "LM Studio 모델 목록을 받지 못했습니다 (%s). lmstudio_model 드롭다운이 "
+            "'(auto)' 하나만 남습니다. 401 이면 LM Studio 의 API key 가 켜져 있는 것이니 "
+            "환경변수 LM_STUDIO_API_KEY 나 lm_studio_token.txt 에 토큰을 넣으세요."
+            % ", ".join(problems)
+        )
 
     _MODEL_CACHE["at"] = now
     _MODEL_CACHE["ids"] = ids
@@ -485,6 +576,15 @@ def _ids_from_v0(payload) -> list:
             continue
         out.append(item.get("id") or "")
     return out
+
+
+def _embedding_ids(payload) -> set:
+    """v0 응답에서 임베딩 모델 id 만 뽑는다 (v1 병합에서 되살아나지 않게)."""
+    return {
+        item.get("id")
+        for item in (payload or {}).get("data") or []
+        if item.get("type") == "embeddings" and item.get("id")
+    }
 
 
 def _ids_from_v1(payload) -> list:

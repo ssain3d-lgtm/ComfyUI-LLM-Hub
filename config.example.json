@@ -6,9 +6,14 @@
     "ttl_sec": 300,
     "unload_after": true
   },
-  "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
+  "cli_paths": {
+    "claude": "claude",
+    "codex": "codex",
+    "gemini": "gemini",
+    "lms": "lms"
+  },
   "defaults": {
-    "gemini_model": "gemini-2.5-flash",
+    "gemini_model": "gemini-3-flash",
     "gemini_approval_mode": "plan",
     "claude_system_prompt_mode": "append"
   },

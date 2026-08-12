@@ -228,8 +228,16 @@ def _on_stream_line(line: str, emitter, state) -> None:
     if not isinstance(event, dict):
         return
 
-    kind = str(
-        event.get("type") or (event.get("msg") or {}).get("type") or ""
+    # 실측(codex-cli 0.146.0): 바깥 type 은 "item.completed" 라 종류를 알려주지 않고,
+    # 진짜 종류는 안쪽 item.type("agent_message" / "command_execution")에 있다.
+    # 바깥만 보면 아래 어느 분기에도 안 걸려 본문이 통째로 버려진다.
+    # 둘을 합쳐서 판정하면 예전 스키마와 새 스키마가 함께 동작한다.
+    inner = event.get("item")
+    kind = " ".join(
+        part for part in (
+            str(event.get("type") or (event.get("msg") or {}).get("type") or ""),
+            str(inner.get("type") or "") if isinstance(inner, dict) else "",
+        ) if part
     ).lower()
 
     if "tool" in kind or "command" in kind or "exec" in kind:
