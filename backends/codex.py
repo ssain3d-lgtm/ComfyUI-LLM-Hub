@@ -21,6 +21,7 @@ import os
 import tempfile
 import time
 
+from ..utils import cancel
 from ..utils.proc import (
     CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args,
     resolve_cli, run_cli, run_cli_stream, screen_extra_args,
@@ -91,6 +92,7 @@ class CodexBackend(BaseBackend):
             if req.mcp_config:
                 notes.append("codex: 비대화형 MCP 승인 이슈로 v1 미지원")
 
+            node_id = getattr(req.emitter, "node_id", None)
             safe_extra, rejected = screen_extra_args(parse_extra_args(req.extra_args))
             if rejected:
                 notes.append(
@@ -110,6 +112,9 @@ class CodexBackend(BaseBackend):
                 state = {"text": ""}
                 code, stdout, stderr, duration = run_cli_stream(
                     args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s,
+                    # Stop 을 누르면 프로세스 트리를 죽인다. 이걸 안 주면 타임아웃까지
+                    # (기본 300초) 붙잡혀 있어 버튼이 듣지 않는 것처럼 보인다.
+                    should_stop=cancel.stopper(node_id), node_id=node_id,
                     on_line=lambda line: _on_stream_line(line, req.emitter, state),
                 )
                 # stdout 은 JSONL 이벤트라 그대로 넘기면 오류 문구 오탐이 난다.
@@ -120,8 +125,10 @@ class CodexBackend(BaseBackend):
                     notes, last_message_path,
                 )
 
+            # 비스트리밍 경로에는 폴링 지점이 없다. 등록해야 Stop 이 듣는다.
             code, stdout, stderr, duration = run_cli(
-                args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s
+                args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s,
+                node_id=node_id,
             )
             return self._parse(code, stdout, stderr, duration, notes, last_message_path)
 

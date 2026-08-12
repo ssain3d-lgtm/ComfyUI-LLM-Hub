@@ -19,6 +19,7 @@ import os
 import time
 
 from ..utils.config import load_config
+from ..utils import cancel
 from ..utils.proc import run_cli_stream
 from ..utils.proc import CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args, resolve_cli, screen_extra_args, run_cli
 from .base import (
@@ -130,6 +131,7 @@ class ClaudeCodeBackend(BaseBackend):
                 # 실측: --tools "" 가 내장 툴 전체를 끄는 공식 방법이다.
                 args += ["--tools", ""]
 
+            node_id = getattr(req.emitter, "node_id", None)
             safe_extra, rejected = screen_extra_args(parse_extra_args(req.extra_args))
             if rejected:
                 notes.append(
@@ -145,12 +147,17 @@ class ClaudeCodeBackend(BaseBackend):
             if streaming:
                 code, stdout, stderr, duration = run_cli_stream(
                     args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s,
+                    # Stop 을 누르면 프로세스 트리를 죽인다. 이걸 안 주면 타임아웃까지
+                    # (기본 300초) 붙잡혀 있어 버튼이 듣지 않는 것처럼 보인다.
+                    should_stop=cancel.stopper(node_id), node_id=node_id,
                     on_line=lambda line: _on_stream_line(line, req.emitter),
                 )
                 return self._parse_stream(code, stdout, stderr, duration, notes)
 
+            # 비스트리밍 경로에는 폴링 지점이 없다. 등록해야 Stop 이 듣는다.
             code, stdout, stderr, duration = run_cli(
-                args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s
+                args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s,
+                node_id=node_id,
             )
             return self._parse(code, stdout, stderr, duration, notes)
 

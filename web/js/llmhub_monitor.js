@@ -142,6 +142,7 @@ function createPanel(node) {
     <div class="llmhub-head">
       <span class="llmhub-status">대기 중</span>
       <span class="llmhub-meta"></span>
+      <button class="llmhub-stop" type="button" title="이 노드의 생성을 중지합니다">■ Stop</button>
     </div>
     <div class="llmhub-body"></div>
   `;
@@ -149,6 +150,28 @@ function createPanel(node) {
   const statusEl = root.querySelector(".llmhub-status");
   const metaEl = root.querySelector(".llmhub-meta");
   const bodyEl = root.querySelector(".llmhub-body");
+  const stopEl = root.querySelector(".llmhub-stop");
+
+  // 캔버스가 이 클릭을 노드 드래그로 삼키지 않게 한다.
+  for (const name of ["pointerdown", "mousedown", "click"]) {
+    stopEl.addEventListener(name, (event) => event.stopPropagation());
+  }
+  stopEl.addEventListener("click", async () => {
+    stopEl.disabled = true;
+    stopEl.textContent = "중지 중...";
+    try {
+      await api.fetchApi("/llmhub/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ node: String(node.id) }),
+      });
+    } catch (error) {
+      // 중지 요청이 실패해도 패널이 멈춘 것처럼 보이면 안 된다.
+      statusEl.textContent = "중지 요청 실패";
+      stopEl.disabled = false;
+      stopEl.textContent = "■ Stop";
+    }
+  });
 
   let stick = true; // 사용자가 위로 스크롤하면 자동 스크롤을 멈춘다
   bodyEl.addEventListener("scroll", () => {
@@ -178,6 +201,16 @@ function createPanel(node) {
       statusEl.textContent = status || (done ? "완료" : "생성 중...");
       statusEl.classList.toggle("llmhub-running", !done);
       metaEl.textContent = elapsed != null ? `${elapsed}s` : "";
+      // 돌고 있을 때만 보인다. 멈출 것이 없을 때 눌러봐야 아무 일도 안 일어나는
+      // 버튼이 남아 있으면 그게 고장처럼 보인다.
+      this.setRunning(!done);
+    },
+    setRunning(running) {
+      stopEl.style.display = running ? "" : "none";
+      if (running) {
+        stopEl.disabled = false;
+        stopEl.textContent = "■ Stop";
+      }
     },
     clear() {
       this.lastText = "";
@@ -214,6 +247,8 @@ function createPanel(node) {
   // 한 칸씩 밀린다. 맨 끝일 때만 구멍이 배열 끝이라 무해하다.
   // → 모니터를 위로 올리고 싶으면 옮기지 말고 사이 위젯을 숨겨라.
   control.widget = widget;
+  // 아직 아무것도 안 돌고 있다. 멈출 게 없을 때 버튼이 보이면 고장처럼 보인다.
+  control.setRunning(false);
 
   return control;
 }
@@ -424,6 +459,20 @@ app.registerExtension({
 
 const style = document.createElement("style");
 style.textContent = `
+.llmhub-stop {
+  margin-left: auto;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 4px;
+  background: var(--comfy-input-bg, #222);
+  color: var(--input-text, #ddd);
+}
+.llmhub-stop:hover:not(:disabled) { border-color: #c04040; color: #ff8080; }
+.llmhub-stop:disabled { opacity: 0.5; cursor: default; }
+
 /* 사고 과정은 답이 아니다 — 흐리고 기울여서 최종 결과와 한눈에 구분되게 한다. */
 .llmhub-body.llmhub-thinking {
   opacity: 0.55;

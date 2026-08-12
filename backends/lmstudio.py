@@ -14,7 +14,7 @@ import os
 import time
 from dataclasses import replace
 
-from ..utils import fs_tools
+from ..utils import cancel, fs_tools
 from ..utils.config import load_config, resolve_api_token
 from .base import (
     BaseBackend,
@@ -258,7 +258,14 @@ class LMStudioBackend(BaseBackend):
 
         text = ""
         timed_out = False
+        stop = cancel.stopper(getattr(req.emitter, "node_id", None))
         for raw in resp.iter_lines(decode_unicode=True):
+            if stop():
+                # 여기서 끊어야 Stop 이 즉시 듣는다. 받은 데까지는 그대로 돌려주고,
+                # 성공으로 위장하지 않는 판정은 호출부가 한다.
+                resp.close()
+                req.emitter.set_status("중지됨 — 받은 부분까지만 사용")
+                break
             if time.time() > deadline:
                 resp.close()
                 timed_out = True
@@ -304,12 +311,37 @@ class LMStudioBackend(BaseBackend):
             req.emitter is not None and req.emitter.enabled and not req.file_access
         )
 
+        node_id = getattr(req.emitter, "node_id", None)
         for iteration in range(self.max_iters):
+            # 반복 경계마다 확인한다. 스트리밍이 꺼져 있으면(stream_view=off, 또는
+            # file_access 의 툴 루프) SSE 루프의 검사를 못 거치므로 여기가 유일한
+            # 중단 지점이다. 이미 날아간 요청 하나는 끝까지 기다려야 한다 --
+            # requests 의 비스트리밍 응답은 도중에 끊을 방법이 없다.
+            if cancel.is_stopped(node_id):
+                return (
+                    LLMResponse(
+                        text=(last_text or "").strip(),
+                        status="중지됨 — 사용자가 멈춰 받은 부분까지만 반환",
+                        raw_debug="lmstudio: 사용자 중지 (반복 경계)",
+                    ),
+                    notes,
+                )
             payload = self._build_payload(req, messages, model)
 
             if streaming:
                 resp, streamed, timed_out = self._stream_chat(req, payload)
                 if streamed is not None:
+                    if cancel.is_stopped(getattr(req.emitter, "node_id", None)):
+                        # 받은 데까지는 돌려준다(timeout 과 같은 규칙). 다만 ok 는 아니다 —
+                        # 중지된 결과가 성공으로 보이면 다운스트림이 잘린 글을 쓴다.
+                        return (
+                            LLMResponse(
+                                text=streamed.strip(),
+                                status="중지됨 — 사용자가 멈춰 받은 부분까지만 반환",
+                                raw_debug="lmstudio: 사용자 중지",
+                            ),
+                            notes,
+                        )
                     if timed_out:
                         # 다른 백엔드와 마찬가지로 잘린 응답은 ok 로 위장하지 않는다.
                         return (

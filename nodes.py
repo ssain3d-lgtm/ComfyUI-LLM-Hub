@@ -8,7 +8,7 @@ import traceback
 from .backends import BACKEND_NAMES, get_backend
 from .backends.base import LLMRequest, truncate_debug
 from .backends.lmstudio import list_model_ids
-from .utils import image_io, stream, video_io
+from .utils import cancel, image_io, stream, video_io
 
 # lmstudio_model 드롭다운의 첫 항목 (= 노드의 model 칸/설정을 따름)
 AUTO_MODEL = "(auto)"
@@ -176,6 +176,9 @@ class LLMHubGenerate:
     ):
         # 노드는 어떤 경우에도 예외를 밖으로 던지지 않는다 (DESIGN N4, §5-3).
         emitter = None
+        # 지난 실행에서 Stop 을 눌렀다면 그 표시를 지운다. 안 지우면 한 번 멈춘
+        # 노드가 영원히 즉시 중지된다.
+        cancel.begin(unique_id)
         try:
             workspace_dir = (workspace_dir or "").strip()
             image_paths = []
@@ -233,6 +236,13 @@ class LLMHubGenerate:
             )
 
             response = get_backend(backend).generate(req)
+
+            # 백엔드마다 중지가 다른 모양으로 끝난다(SSE 중단 / 프로세스 사망 →
+            # "종료 코드 -1" 등). 사용자가 누른 것은 오류가 아니므로 여기 한 곳에서
+            # 통일해 말해준다. 받은 데까지는 그대로 둔다.
+            if cancel.is_stopped(unique_id):
+                response.status = "중지됨 — 사용자가 멈춰 받은 부분까지만 반환"
+
             emitter.finish(status=response.status, text=response.text or emitter.text)
 
             debug_parts = list(media_notes)
