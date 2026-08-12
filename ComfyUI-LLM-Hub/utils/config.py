@@ -24,8 +24,15 @@ DEFAULTS = {
         "base_url": "http://127.0.0.1:1234",
         "api_token": "",
         "default_model": "",
+        # 유휴 TTL(초). LM Studio 가 이 시간 동안 요청이 없으면 모델을 VRAM 에서 내린다.
+        # 0 이면 ttl 을 보내지 않는다(LM Studio 기본값 60분 적용).
+        "ttl_sec": 300,
+        # 응답 직후 `lms unload <model>` 로 즉시 VRAM 을 비울지 여부.
+        # ComfyUI 는 이미지 모델이 VRAM 을 써야 하므로 기본으로 켠다.
+        "unload_after": True,
     },
-    "cli_paths": {"claude": "claude", "codex": "codex", "gemini": "gemini"},
+    # lms 는 LM Studio 의 CLI (즉시 언로드에 사용)
+    "cli_paths": {"claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms"},
     "defaults": {
         "gemini_model": "gemini-2.5-flash",
         # Gemini CLI 의 승인 모드. "plan" = 읽기 전용(실측 §8.4).

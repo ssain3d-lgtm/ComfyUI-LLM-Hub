@@ -7,6 +7,8 @@ ComfyUI에서 LLM 백엔드를 드롭다운으로 골라 텍스트를 생성하�
 - **4개 백엔드**: `lmstudio` / `claude` / `codex` / `gemini`
 - **파일 접근**: 지정한 폴더 안의 파일을 LLM이 읽고 답할 수 있음
 - **이미지 · 비디오 입력**: 멀티모달 프롬프트 지원
+- **실시간 모니터링 창**: 생성 중인 텍스트를 노드 안에서 바로 확인 (plain / markdown)
+- **VRAM 자동 해제**: LM Studio 모델을 응답 직후 또는 유휴 시간 뒤 내림
 - **항상 3개 출력**: `text` / `status` / `debug` — 노드가 예외로 워크플로우를 죽이지 않음
 
 ---
@@ -66,6 +68,10 @@ pip 의존성은 **`requests` 하나**입니다.
 | `temperature` / `max_tokens` | **lmstudio에만 적용.** CLI 3종은 해당 플래그를 노출하지 않아 무시되고 `debug`에 기록됩니다 |
 | `timeout_sec` | 기본 300초 |
 | `video_max_frames` | 비디오를 프레임으로 바꿀 때 뽑을 장수 (기본 8) |
+| `stream_view` | 모니터링 창 표시 방식: `plain`(기본) / `markdown` / `off` |
+| `lmstudio_model` | LM Studio 모델 드롭다운. `(auto)`면 `model` 칸/설정을 따름 |
+| `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
+| `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
 | `seed` | **값 자체는 쓰지 않습니다.** ComfyUI가 "입력이 바뀌었다 → 다시 실행"으로 인식하게 하는 캐시 무효화용입니다 |
 | `image` *(옵션)* | ComfyUI IMAGE |
 | `video` / `video_path` *(옵션)* | ComfyUI VIDEO 입력 또는 비디오 파일 경로 |
@@ -133,6 +139,53 @@ pip 의존성은 **`requests` 하나**입니다.
 
 ---
 
+## 5-2. 실시간 모니터링 창
+
+노드 안에 생성 중인 내용이 실시간으로 표시됩니다. `stream_view`로 방식을 고릅니다.
+
+| 값 | 언제 쓰나 |
+|---|---|
+| `plain` (기본) | **이미지 프롬프트 생성용.** 모델이 낸 문자를 있는 그대로 보여줍니다. `**` 같은 기호도 그대로 보이므로 CLIP Text Encode로 넘어갈 실제 문자열을 확인할 수 있습니다 |
+| `markdown` | **문서 요약/분석용.** 제목·불릿·코드블록을 렌더링해 읽기 편합니다 |
+| `off` | 표시하지 않음. 스트리밍 자체를 하지 않아 오버헤드가 없습니다 |
+
+- 모드는 **생성 중에 바꿔도** 즉시 다시 그려집니다.
+- 위로 스크롤하면 자동 스크롤이 멈추고, 맨 아래로 내리면 다시 따라갑니다.
+- 도구를 쓰는 백엔드는 상단에 `도구 사용: Read` 같은 진행 상황이 표시됩니다.
+- 모니터링 창 내용은 워크플로우 파일에 저장되지 않습니다.
+
+백엔드별 스트리밍 방식(모두 실측):
+
+| 백엔드 | 방식 |
+|---|---|
+| claude | `--output-format stream-json --include-partial-messages --verbose` → 토큰 단위 |
+| gemini | `-o stream-json` → `message`(role=assistant, delta) 이벤트 |
+| codex | `--json` JSONL |
+| lmstudio | SSE (`stream: true`) → 토큰 단위 |
+
+> `file_access=True`인 LM Studio는 스트리밍하지 않습니다. 도구 호출이 조각으로 오면 조립이 불안정해서, 정확성을 위해 도구 진행 상황만 표시합니다.
+
+---
+
+## 5-3. LM Studio 모델 선택과 VRAM 관리
+
+ComfyUI는 이미지 모델이 VRAM을 써야 하므로, LM Studio가 모델을 물고 있으면 문제가 됩니다.
+
+**모델 선택** — `lmstudio_model` 드롭다운에서 고릅니다.
+LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 브라우저를 새로고침**하면 목록이 채워집니다.
+`(auto)`면 `model` 칸 → `config.json`의 `default_model` → 서버가 로드한 모델 순으로 정해집니다.
+
+**VRAM 해제** — 두 가지가 함께 걸려 있습니다.
+
+1. `lmstudio_unload_after` (기본 켜짐) — 응답 직후 `lms unload <모델>`로 **즉시** 내립니다.
+   LM Studio의 `lms` CLI가 PATH에 있어야 합니다. 없으면 건너뛰고 `debug`에 이유를 남깁니다(생성은 정상).
+2. `lmstudio_ttl_sec` (기본 300초) — 요청에 `ttl`을 실어 보내, 그 시간 동안 요청이 없으면 LM Studio가 알아서 내립니다.
+   `lms`가 없을 때의 안전망입니다. `0`이면 보내지 않습니다(LM Studio 기본값 60분 적용).
+
+반복 호출이 많아 매번 다시 로드하는 게 느리다면 `lmstudio_unload_after`를 끄고 `lmstudio_ttl_sec`만 쓰세요.
+
+---
+
 ## 6. 설정 파일 (`config.json`)
 
 첫 실행 시 `config.example.json`을 복사해 자동 생성됩니다. (`config.json`은 git에 올라가지 않습니다.)
@@ -142,9 +195,11 @@ pip 의존성은 **`requests` 하나**입니다.
   "lmstudio": {
     "base_url": "http://127.0.0.1:1234",
     "api_token": "",
-    "default_model": ""
+    "default_model": "",
+    "ttl_sec": 300,
+    "unload_after": true
   },
-  "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini" },
+  "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
     "gemini_model": "gemini-2.5-flash",
     "gemini_approval_mode": "plan",
@@ -161,6 +216,8 @@ pip 의존성은 **`requests` 하나**입니다.
   - `append`(기본) — Claude Code 기본 시스템 프롬프트에 덧붙입니다. 도구 사용 능력이 유지됩니다.
   - `replace` — 기본 프롬프트를 통째로 바꿉니다. **문체·언어 지시를 강하게 먹이고 싶을 때** 쓰세요.
     `append` 모드에서는 기본 프롬프트가 강해서 "영어로만 답해" 같은 지시가 희석되는 것을 실측으로 확인했습니다.
+- `lmstudio.ttl_sec` / `lmstudio.unload_after`: **노드 위젯의 기본값**이 됩니다. 개별 실행은 위젯 값이 우선합니다.
+- `cli_paths.lms`: LM Studio CLI 경로. 즉시 VRAM 해제에 씁니다.
 - `api_token` 같은 비밀값은 `debug` 출력에 절대 포함되지 않습니다.
 
 ---
@@ -180,6 +237,9 @@ pip 의존성은 **`requests` 하나**입니다.
 | `debug`에 `tool loop limit` | LM Studio가 도구 호출만 반복했습니다. `tool_loop_max_iters`를 늘리거나 프롬프트를 더 구체적으로 쓰세요 |
 | `debug`에 `unsupported: temperature` | 정상입니다. CLI 백엔드는 해당 파라미터를 노출하지 않습니다 |
 | 비디오를 넣었는데 `ffmpeg` 안내가 뜸 | ffmpeg을 설치하고 PATH에 추가하세요 (§5) |
+| 모니터링 창이 안 보임 | 브라우저를 새로고침하세요(JS 확장 로드). `stream_view`가 `off`인지도 확인 |
+| `debug`에 `lms CLI 를 찾을 수 없어` | LM Studio 설치 폴더의 `lms`를 PATH에 넣거나 `config.json`의 `cli_paths.lms`에 절대경로를 지정하세요. 없어도 TTL로는 해제됩니다 |
+| `lmstudio_model` 드롭다운이 비어 있음 | LM Studio를 켠 뒤 **브라우저를 새로고침**하세요 |
 
 ### 속도
 

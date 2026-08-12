@@ -125,3 +125,87 @@ def cleanup_dir(path: str) -> None:
         shutil.rmtree(path, ignore_errors=True)
     except Exception:
         pass
+
+
+def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300, on_line=None):
+    """run_cli 와 같지만 stdout 을 한 줄씩 읽으며 on_line(line) 을 호출한다.
+
+    스트리밍 출력(JSONL/SSE)을 실시간으로 노드에 흘려보내기 위한 변형이다.
+    반환값은 run_cli 와 동일한 (exit_code, stdout, stderr, duration_s).
+    """
+    import threading
+
+    started = time.time()
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd or None,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=build_env(),
+        creationflags=_creation_flags(),
+    )
+
+    out_chunks = []
+    err_chunks = []
+
+    def pump_stdout():
+        try:
+            for line in proc.stdout:
+                out_chunks.append(line)
+                if on_line:
+                    try:
+                        on_line(line)
+                    except Exception:
+                        # 콜백 오류가 생성 자체를 막으면 안 된다.
+                        pass
+        except Exception:
+            pass
+
+    def pump_stderr():
+        try:
+            for line in proc.stderr:
+                err_chunks.append(line)
+        except Exception:
+            pass
+
+    def feed_stdin():
+        try:
+            if stdin_text is not None:
+                proc.stdin.write(stdin_text)
+            proc.stdin.close()
+        except Exception:
+            pass
+
+    threads = [
+        threading.Thread(target=feed_stdin, daemon=True),
+        threading.Thread(target=pump_stdout, daemon=True),
+        threading.Thread(target=pump_stderr, daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc.kill()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            pass
+
+    for thread in threads:
+        thread.join(timeout=5)
+
+    duration = time.time() - started
+    stdout = "".join(out_chunks)
+    stderr = "".join(err_chunks)
+
+    if timed_out:
+        return -1, stdout, stderr + f"\nerror: timeout({timeout_s}s)", duration
+    return proc.returncode, stdout, stderr, duration

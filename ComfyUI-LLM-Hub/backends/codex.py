@@ -16,11 +16,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
 
-from ..utils.proc import CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args, resolve_cli, run_cli
+from ..utils.proc import (
+    CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args,
+    resolve_cli, run_cli, run_cli_stream,
+)
 from .base import (
     BaseBackend,
     LLMRequest,
@@ -66,7 +70,10 @@ class CodexBackend(BaseBackend):
             handle, last_message_path = tempfile.mkstemp(prefix="llmhub_codex_", suffix=".txt")
             os.close(handle)
 
+            streaming = req.emitter is not None and req.emitter.enabled
             args = [exe, "exec", "-s", "read-only", "--skip-git-repo-check"]
+            if streaming:
+                args += ["--json"]
 
             if (req.model or "").strip():
                 args += ["-m", req.model.strip()]
@@ -92,10 +99,23 @@ class CodexBackend(BaseBackend):
             prompt = merge_system_prompt(req)
             notes.append(unsupported_note("codex", "temperature", "max_tokens"))
 
+            if streaming:
+                state = {"text": ""}
+                code, stdout, stderr, duration = run_cli_stream(
+                    args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s,
+                    on_line=lambda line: _on_stream_line(line, req.emitter, state),
+                )
+                # stdout 은 JSONL 이벤트라 그대로 넘기면 오류 문구 오탐이 난다.
+                # 대신 스트리밍으로 모은 평문을 폴백 본문으로 넘긴다
+                # (-o 파일이 비었을 때 "응답이 비어 있음" 으로 잘못 끝나지 않게).
+                return self._parse(
+                    code, state.get("text", ""), stderr, duration,
+                    notes, last_message_path,
+                )
+
             code, stdout, stderr, duration = run_cli(
                 args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s
             )
-
             return self._parse(code, stdout, stderr, duration, notes, last_message_path)
 
         except Exception as exc:
@@ -163,6 +183,60 @@ class CodexBackend(BaseBackend):
             duration_s=duration,
             raw_debug=truncate_debug(debug),
         )
+
+
+# codex --json 의 이벤트 스키마는 이 환경에서 실측하지 못했다(로그인 필요).
+# 그래서 특정 형태를 단정하지 않고, 흔히 쓰이는 필드 이름들을 관대하게 훑는다.
+# 아무것도 못 찾아도 최종 본문은 -o 파일에서 읽으므로 결과 자체는 정상이다.
+_TEXT_KEYS = ("delta", "text", "message", "content", "last_agent_message")
+
+
+def _extract_text(obj):
+    """중첩 dict 에서 사람이 읽을 만한 텍스트 조각을 찾아본다."""
+    if isinstance(obj, str):
+        return obj
+    if not isinstance(obj, dict):
+        return ""
+    for key in _TEXT_KEYS:
+        value = obj.get(key)
+        if isinstance(value, str) and value:
+            return value
+    for nested_key in ("msg", "item", "event", "data"):
+        nested = obj.get(nested_key)
+        if isinstance(nested, dict):
+            found = _extract_text(nested)
+            if found:
+                return found
+    return ""
+
+
+def _on_stream_line(line: str, emitter, state) -> None:
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return
+    if not isinstance(event, dict):
+        return
+
+    kind = str(
+        event.get("type") or (event.get("msg") or {}).get("type") or ""
+    ).lower()
+
+    if "tool" in kind or "command" in kind or "exec" in kind:
+        emitter.set_status(f"도구 사용: {kind}")
+        return
+
+    piece = _extract_text(event)
+    if not piece:
+        return
+
+    if "delta" in kind:
+        state["text"] = state.get("text", "") + piece
+        emitter.append(piece)
+    elif "message" in kind or "agent" in kind:
+        # 완성 메시지는 누적본을 대체한다(델타 중복 방지).
+        state["text"] = piece
+        emitter.reset_text(piece)
 
 
 def _read_text(path: str) -> str:

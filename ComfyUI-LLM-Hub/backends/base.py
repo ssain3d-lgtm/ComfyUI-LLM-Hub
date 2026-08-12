@@ -30,8 +30,15 @@ class LLMRequest:
     mcp_config: str = ""  # JSON 파일 경로 또는 ""
     temperature: float = 0.7
     max_tokens: int = 2048
+    # LM Studio 전용. None = config.json 의 lmstudio 설정을 따름.
+    # ttl_sec: 유휴 TTL(초), 0 이면 ttl 을 보내지 않는다.
+    # unload_after: 응답 직후 lms unload 로 VRAM 을 비울지.
+    ttl_sec: object = None
+    unload_after: object = None
     timeout_s: int = 300
     extra_args: str = ""
+    # 실시간 모니터링용 StreamEmitter (없으면 스트리밍하지 않는다)
+    emitter: object = None
 
 
 @dataclass

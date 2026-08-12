@@ -410,3 +410,75 @@ pip 의존성을 늘리지 않기 위해 외부 실행 파일과 기존 패키�
 
 프레임 변환 경로는 정지 화면 몇 장만 보는 것이라 빠른 움직임과 오디오는 반영되지 않는다.
 영상 자체의 이해가 중요하면 `gemini` 백엔드를 쓰는 편이 정확하다.
+
+
+---
+
+## 17. 실시간 모니터링 창 + LM Studio VRAM 관리 (설계 이후 추가)
+
+<!-- 수정: 설계 §1 비목표에 "스트리밍 출력"이 있었으나 사용자 요청으로 v1 에 포함한다. -->
+
+### 17.1 스트리밍 (실측한 수단)
+
+| 백엔드 | 플래그 | 이벤트 |
+|---|---|---|
+| claude | `--output-format stream-json --include-partial-messages --verbose` | `stream_event.content_block_delta.delta.text_delta.text` |
+| gemini | `-o stream-json` | `{"type":"message","role":"assistant","content":...,"delta":true}` (CLI 번들 소스에서 확인) |
+| codex | `--json` | 스키마 미실측(로그인 불가) → 관대한 파서 + `-o` 파일 폴백 |
+| lmstudio | `stream: true` (SSE) | `choices[].delta.content` |
+
+전송 경로: 백엔드 → `utils/stream.py`(PromptServer 웹소켓, `llmhub.stream`)
+→ `web/js/llmhub_monitor.js`. 누적 전문을 보내 프론트가 순서를 맞출 필요가 없다.
+
+<!-- 수정(중요, 오탐): claude 는 정상 호출에도 매번
+     {"type":"rate_limit_event", ..., "rateLimitType":"five_hour"} 를 흘린다.
+     이 원문을 detect_rate_limit() 에 넘기면 "rate_limit" 부분 문자열에 걸려
+     모든 스트리밍 호출이 rate_limited 로 잘못 분류된다(실측으로 발견).
+     → 스트림 원문은 절대 오류 판정에 넘기지 않고, 최종 result 객체만 넘긴다.
+     codex/gemini 스트리밍 경로도 같은 이유로 원문을 넘기지 않는다. -->
+
+<!-- 수정(인코딩): LM Studio SSE 응답에 charset 이 없으면 requests 가 ISO-8859-1 로
+     디코딩해 한글이 깨진다(테스트로 발견). → resp.encoding = "utf-8" 을 명시한다. -->
+
+<!-- 수정(타임아웃): stream=True 에서 requests 의 timeout 은 청크 사이 간격만 잰다.
+     → 벽시계 기준 deadline 을 따로 걸어 timeout_sec 가 전체 시간을 막게 했다. -->
+
+`file_access=True` 인 LM Studio 는 스트리밍하지 않는다. tool_calls 가 delta 로
+조각나 오면 조립이 불안정하므로, 검증된 비스트리밍 툴 루프를 유지하고
+도구 진행 상황만 status 로 보여준다.
+
+### 17.2 표시 방식
+
+`stream_view` = `plain`(기본) / `markdown` / `off`.
+기본을 plain 으로 둔 이유: 이 노드의 주 용도인 이미지 프롬프트 생성에서는
+CLIP Text Encode 로 넘어갈 **문자 그대로**를 봐야 하고, 렌더링하면 `**` 같은
+기호가 화면에서 사라져 실제 출력과 화면이 달라진다. 문서 요약에는 markdown 이 낫다.
+
+마크다운 렌더러는 외부 CDN 없이 직접 구현했다(오프라인 동작).
+<!-- 수정(보안): LLM 출력은 신뢰할 수 없는 입력이다. 링크 렌더링에 스킴 화이트리스트
+     (http/https/mailto)를 걸어 javascript: 가 ComfyUI 오리진에서 실행되지 않게 했다. -->
+
+### 17.3 LM Studio VRAM 관리 (공식 문서 확인 후 구현)
+
+- `ttl`(초) 필드를 OpenAI 호환 엔드포인트가 받는다. JIT 로드 모델 기본 60분.
+- `lms unload <model>` 로 즉시 해제. 대상 모델은 응답 JSON 의 `model` 필드로 특정한다.
+- `/api/v0/models` 가 `state`(loaded/not-loaded)와 `type` 을 주므로 드롭다운을 만든다.
+  버전에 따라 로드된 모델만 반환하는 이슈가 있어 `/v1/models` 결과와 합친다.
+
+### 17.4 코드 리뷰에서 잡아 고친 것
+
+<!-- 수정: 리뷰(high) 결과 10건을 모두 수정했다.
+     1. web JS: onNodeCreated 시점의 node.id 는 -1 이라 id 키 Map 이 영영 매칭되지 않았다
+        (모니터링 창이 아예 안 뜨는 치명적 결함) → 패널을 노드 객체에 직접 붙인다.
+     2. lmstudio_model COMBO 는 서버 상태에 따라 목록이 줄어드는데, 그때 ComfyUI 기본
+        검증이 저장된 값을 거부해 워크플로우 전체가 실패했다 → VALIDATE_INPUTS 로 우회.
+     3. 새 위젯을 기존 위젯 사이에 끼워 넣어 예전 워크플로우의 widgets_values 가 밀렸다
+        → 새 위젯은 required/optional 모두 맨 뒤에 배치.
+     4. codex 스트리밍이 stdout 폴백 본문을 버려 -o 가 비면 "응답이 비어 있음" 이 됐다
+        → 스트리밍으로 모은 평문을 폴백으로 넘긴다.
+     5. config 의 ttl_sec/unload_after 가 읽히기만 하고 안 쓰였다
+        → 위젯 기본값으로 반영 + 요청이 None 이면 config 를 따르게.
+     6. gemini 스트리밍이 비정상 종료도 ok 로 표시했다 → result 이벤트/종료 코드 확인.
+     7. 재실행 시 이전 결과가 남아 현재 결과처럼 보였다 → execution_start 에서 초기화.
+     8. 예외 경로에서 emitter.finish() 를 안 해 "생성 중..." 으로 멈춰 있었다.
+     9. SSE 타임아웃 (17.1 참조), 10. javascript: 링크 (17.2 참조). -->

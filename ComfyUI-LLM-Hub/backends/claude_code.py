@@ -19,6 +19,7 @@ import os
 import time
 
 from ..utils.config import load_config
+from ..utils.proc import run_cli_stream
 from ..utils.proc import CliNotFoundError, cleanup_dir, make_empty_dir, parse_extra_args, resolve_cli, run_cli
 from .base import (
     BaseBackend,
@@ -71,7 +72,16 @@ class ClaudeCodeBackend(BaseBackend):
                 temp_cwd = make_empty_dir()
                 cwd = temp_cwd
 
-            args = [exe, "-p", "--output-format", "json"]
+            streaming = req.emitter is not None and req.emitter.enabled
+            if streaming:
+                # 실측: stream-json + --include-partial-messages 로 토큰 단위 델타가 온다.
+                # (--verbose 가 함께 필요하다)
+                args = [
+                    exe, "-p", "--output-format", "stream-json",
+                    "--include-partial-messages", "--verbose",
+                ]
+            else:
+                args = [exe, "-p", "--output-format", "json"]
 
             if (req.model or "").strip():
                 args += ["--model", req.model.strip()]
@@ -125,10 +135,16 @@ class ClaudeCodeBackend(BaseBackend):
             prompt = _build_prompt(req, staged)
             notes.append(unsupported_note("claude", "temperature", "max_tokens"))
 
+            if streaming:
+                code, stdout, stderr, duration = run_cli_stream(
+                    args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s,
+                    on_line=lambda line: _on_stream_line(line, req.emitter),
+                )
+                return self._parse_stream(code, stdout, stderr, duration, notes)
+
             code, stdout, stderr, duration = run_cli(
                 args, cwd=cwd, stdin_text=prompt, timeout_s=req.timeout_s
             )
-
             return self._parse(code, stdout, stderr, duration, notes)
 
         except Exception as exc:  # 모든 예외를 status 로 변환 (DESIGN §6)
@@ -139,6 +155,50 @@ class ClaudeCodeBackend(BaseBackend):
             )
         finally:
             cleanup_dir(temp_cwd)
+
+    def _parse_stream(self, code, stdout, stderr, duration, notes) -> LLMResponse:
+        """stream-json 출력에서 최종 result 객체를 찾아 일반 파서로 넘긴다.
+
+        주의: 이벤트 스트림 원문을 그대로 오류 판정에 넘기면 안 된다.
+        claude 는 정상 호출에도 매번 {"type":"rate_limit_event", ...,
+        "rateLimitType":"five_hour"} 를 흘리는데, 여기에 "rate_limit" 문자열이
+        들어 있어 detect_rate_limit() 가 무조건 참이 된다(실측).
+        → 최종 result 객체만 파서에 넘기고, 없으면 델타를 모아서 쓴다.
+        """
+        final = ""
+        deltas = []
+        for line in (stdout or "").splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if "result" in obj and "is_error" in obj:
+                final = line  # 최종 요약 객체
+                continue
+            if obj.get("type") == "stream_event":
+                inner = obj.get("event") or {}
+                if inner.get("type") == "content_block_delta":
+                    delta = inner.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        deltas.append(delta.get("text") or "")
+
+        if final:
+            return self._parse(code, final, stderr, duration, notes)
+
+        # 최종 객체가 없다 = 비정상 종료. 모은 델타를 본문으로 쓰고
+        # 오류 판정은 stderr 로만 한다(stdout 이벤트 원문은 넘기지 않는다).
+        partial = "".join(deltas).strip()
+        response = self._parse(code, "", stderr, duration, notes)
+        if partial and not response.text:
+            response.text = partial
+            if response.status.startswith("error:"):
+                response.raw_debug = truncate_debug(
+                    response.raw_debug + "\n(스트리밍 중단 — 받은 부분까지만 반환)"
+                )
+        return response
 
     def _parse(self, code, stdout, stderr, duration, notes) -> LLMResponse:
         debug = "\n".join([n for n in notes if n])
@@ -204,6 +264,39 @@ class ClaudeCodeBackend(BaseBackend):
             duration_s=duration,
             raw_debug=truncate_debug(debug),
         )
+
+
+def _on_stream_line(line: str, emitter) -> None:
+    """claude 의 stream-json 한 줄을 해석해 모니터링 창에 반영한다.
+
+    실측 이벤트:
+      {"type":"stream_event","event":{"type":"content_block_delta",
+       "delta":{"type":"text_delta","text":"..."}}}
+      {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read",...}]}}
+    """
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return
+
+    kind = event.get("type")
+
+    if kind == "stream_event":
+        inner = event.get("event") or {}
+        if inner.get("type") == "content_block_delta":
+            delta = inner.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                emitter.append(delta.get("text") or "")
+        return
+
+    if kind == "assistant":
+        for block in ((event.get("message") or {}).get("content") or []):
+            if block.get("type") == "tool_use":
+                emitter.set_status(f"도구 사용: {block.get('name', '?')}")
+        return
+
+    if kind == "system" and event.get("subtype") == "init":
+        emitter.set_status("모델 준비 중...")
 
 
 def _build_prompt(req: LLMRequest, staged: list) -> str:

@@ -25,7 +25,8 @@ class MockLMStudio:
       {"tool_calls": [{"name": ..., "path": ...}]}  -> 툴 호출 요청
     """
 
-    def __init__(self, script=None, models=None, fail_without_model=False):
+    def __init__(self, script=None, models=None, fail_without_model=False, sse=False):
+        self.sse = sse
         self.script = list(script or [{"content": "OK"}])
         self.models = models or ["mock-model-a", "mock-model-b"]
         self.fail_without_model = fail_without_model
@@ -76,6 +77,25 @@ class MockLMStudio:
 
                 step = outer.script[min(outer._index, len(outer.script) - 1)]
                 outer._index += 1
+
+                # 스트리밍 요청이면 SSE 로 토큰을 쪼개 보낸다.
+                if outer.sse and payload.get("stream"):
+                    content = step.get("content", "")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    for char in content:
+                        chunk = {
+                            "model": outer.models[0],
+                            "choices": [{"index": 0, "delta": {"content": char}}],
+                        }
+                        self.wfile.write(
+                            ("data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n").encode("utf-8")
+                        )
+                        self.wfile.flush()
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                    return
 
                 if "tool_calls" in step:
                     calls = [
