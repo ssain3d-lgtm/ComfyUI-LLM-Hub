@@ -277,7 +277,16 @@ class LMStudioBackend(BaseBackend):
             if obj.get("model"):
                 self._served_model = obj["model"]
             for choice in obj.get("choices") or []:
-                piece = (choice.get("delta") or {}).get("content") or ""
+                delta = choice.get("delta") or {}
+                # 추론 모델은 답을 쓰기 전에 사고 과정을 먼저 흘린다. 이걸 안 받으면
+                # 생성 시간 대부분 동안 모니터 창에 아무것도 안 뜬다 (실측: 델타
+                # 298개가 thinking, 3개가 본문). 본문 칸에는 절대 섞지 않는다 —
+                # 노드의 text 출력이 오염되면 다운스트림 프롬프트가 망가진다.
+                think = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                if think:
+                    # 예전 emitter 에는 이 메서드가 없다.
+                    getattr(req.emitter, "append_thinking", lambda _piece: None)(think)
+                piece = delta.get("content") or ""
                 if piece:
                     text += piece
                     req.emitter.append(piece)

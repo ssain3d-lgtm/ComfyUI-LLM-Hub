@@ -36,6 +36,10 @@ class StreamEmitter:
         self.enabled = bool(enabled and self.node_id)
         self.throttle_s = throttle_s
         self.text = ""
+        # 추론 모델의 숨은 사고 과정. 본문과 반드시 분리해서 들고 있어야 한다 —
+        # 노드의 text 출력은 다운스트림 프롬프트로 들어가므로 섞이면 안 된다.
+        # (실측: LM Studio 스트림의 델타 298개가 thinking, 3개가 본문이었다.)
+        self.thinking = ""
         self.status = ""
         self.started = time.time()
         self._last_push = 0.0
@@ -50,6 +54,17 @@ class StreamEmitter:
         if not delta:
             return
         self.text += delta
+        self._push()
+
+    def append_thinking(self, delta: str) -> None:
+        """모델이 답을 쓰기 전에 뱉는 사고 과정 조각을 붙인다.
+
+        본문(append)과 다른 칸으로 보낸다. 프론트엔드는 본문이 오기 전까지만
+        이걸 흐리게 보여주고, 본문이 시작되면 본문으로 갈아탄다.
+        """
+        if not delta:
+            return
+        self.thinking += delta
         self._push()
 
     def set_status(self, status: str) -> None:
@@ -83,6 +98,7 @@ class StreamEmitter:
         payload = {
             "node": self.node_id,
             "text": self.text,
+            "thinking": self.thinking,
             "status": self.status,
             "elapsed": round(now - self.started, 1),
             "done": bool(done),

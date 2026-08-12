@@ -159,11 +159,19 @@ function createPanel(node) {
     root,
     lastText: "",
     render(text, mode) {
+      bodyEl.classList.remove("llmhub-thinking");
       if (mode === "markdown") {
         bodyEl.innerHTML = renderMarkdown(text || "");
       } else {
         bodyEl.textContent = text || "";
       }
+      if (stick) bodyEl.scrollTop = bodyEl.scrollHeight;
+    },
+    renderThinking(text) {
+      // 사고 과정은 항상 원문 그대로 흐리게. 마크다운으로 렌더하면 답처럼 보여서
+      // 어느 쪽이 최종 결과인지 헷갈린다.
+      bodyEl.classList.add("llmhub-thinking");
+      bodyEl.textContent = text || "";
       if (stick) bodyEl.scrollTop = bodyEl.scrollHeight;
     },
     setStatus(status, elapsed, done) {
@@ -174,6 +182,7 @@ function createPanel(node) {
     clear() {
       this.lastText = "";
       bodyEl.textContent = "";
+      bodyEl.classList.remove("llmhub-thinking");
       stick = true;
     },
   };
@@ -318,9 +327,25 @@ app.registerExtension({
       const mode = viewMode(node);
       if (mode === "off") return;
 
-      control.lastText = data.text || "";
-      control.render(control.lastText, mode);
-      control.setStatus(data.status, data.elapsed, data.done);
+      const body = data.text || "";
+      const thinking = data.thinking || "";
+
+      if (body) {
+        // 본문이 한 글자라도 오면 즉시 그쪽으로 갈아탄다. 사고 과정은 답이 아니므로
+        // 답이 나오기 시작하면 더 보여줄 이유가 없다.
+        control.lastText = body;
+        control.render(body, mode);
+        control.setStatus(data.status, data.elapsed, data.done);
+      } else if (thinking && !data.done) {
+        // 이게 없으면 생성 시간의 대부분을 빈 창으로 앉아 있게 된다
+        // (실측: 델타 298개가 thinking, 3개가 본문).
+        control.renderThinking(thinking);
+        control.setStatus("생각 중...", data.elapsed, false);
+      } else {
+        control.lastText = body;
+        control.render(body, mode);
+        control.setStatus(data.status, data.elapsed, data.done);
+      }
     });
 
     // 새 실행이 시작되면 지난 결과를 지운다.
@@ -399,6 +424,13 @@ app.registerExtension({
 
 const style = document.createElement("style");
 style.textContent = `
+/* 사고 과정은 답이 아니다 — 흐리고 기울여서 최종 결과와 한눈에 구분되게 한다. */
+.llmhub-body.llmhub-thinking {
+  opacity: 0.55;
+  font-style: italic;
+  white-space: pre-wrap;
+}
+
 .llmhub-monitor {
   display: flex; flex-direction: column;
   width: 100%; height: 100%;
