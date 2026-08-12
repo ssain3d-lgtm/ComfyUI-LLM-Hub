@@ -97,8 +97,12 @@
 
 ## 4. 저장소 구조
 
+<!-- 수정: 저장소 이름을 ComfyUI-LLM-Hub 로 바꾸면서 아래 파일들을 저장소 루트로 옮겼다.
+     ComfyUI 노드팩은 custom_nodes/ 아래로 바로 clone 하는 것이 표준이라,
+     저장소 루트가 곧 노드팩 폴더가 되는 구조가 맞다. -->
+
 ```
-ComfyUI-LLM-Hub/
+ComfyUI-LLM-Hub/            # = 저장소 루트 (custom_nodes/ 아래로 clone)
 ├─ __init__.py              # NODE_CLASS_MAPPINGS / NODE_DISPLAY_NAME_MAPPINGS
 ├─ nodes.py                 # ComfyUI 노드 클래스 (LLMHubGenerate)
 ├─ backends/
