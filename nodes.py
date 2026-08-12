@@ -69,8 +69,14 @@ class LLMHubGenerate:
                     {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05,
                      "tooltip": "창의성(0=일관, 높을수록 다양). lmstudio 에만 적용, CLI 3종은 무시."},
                 ),
-                "max_tokens": ("INT", {"default": 2048, "min": 1, "max": 32768,
-                    "tooltip": "최대 생성 토큰. lmstudio 에만 적용, CLI 3종은 무시."}),
+                # 상한은 32768 이었는데 근거가 없었다. LM Studio 에 올라와 있는 모델들의
+                # max_context_length 를 조회해보면 전부 262144 라, 위젯이 실제 능력의
+                # 1/8 에서 막고 있었다. 상한만 키우는 것이라 저장된 워크플로우는 영향이 없다.
+                "max_tokens": ("INT", {"default": 2048, "min": 1, "max": 262144,
+                    "tooltip": "최대 생성 토큰. lmstudio 에만 적용, CLI 3종은 무시. "
+                               "추론 모델은 답을 쓰기 전에 숨은 사고 과정을 먼저 뱉고 "
+                               "그 분량도 여기 포함되므로, 작게 잡으면 본문이 빈 채로 "
+                               "잘린다. 1000 이상을 권한다."}),
                 "timeout_sec": ("INT", {"default": 300, "min": 10, "max": 3600,
                     "tooltip": "제한 시간(초). CLI 는 콜드스타트에 몇 초 걸리니 넉넉히."}),
                 # seed 값 자체는 사용하지 않는다 (DESIGN §5-4).

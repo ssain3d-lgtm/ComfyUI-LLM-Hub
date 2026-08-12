@@ -26,6 +26,7 @@ _PACK_NAME = os.path.basename(_PACK_ROOT)
 
 base = importlib.import_module(f"{_PACK_NAME}.backends.base")
 lmstudio_mod = importlib.import_module(f"{_PACK_NAME}.backends.lmstudio")
+nodes_mod = importlib.import_module(f"{_PACK_NAME}.nodes")
 
 
 class ReasoningServer:
@@ -86,6 +87,29 @@ def _run(server, max_tokens=256):
     req = base.LLMRequest("lmstudio", "m", "", "안녕")
     req.max_tokens = max_tokens
     return backend.generate(req)
+
+
+class TestMaxTokensRange(unittest.TestCase):
+    """상한은 모델이 실제로 감당하는 값에 맞춰야 한다.
+
+    실측 2026-08-12: LM Studio 에 올라온 채팅 모델 6종 전부 max_context_length=262144.
+    옛 상한 32768 은 그 1/8 이라, 추론 토큰까지 먹는 이 노드에서는 특히 답답했다.
+    """
+
+    def setUp(self):
+        self.spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()["required"]["max_tokens"][1]
+
+    def test_upper_bound_matches_the_measured_context(self):
+        self.assertEqual(self.spec["max"], 262144)
+
+    def test_default_is_generous_enough_for_reasoning_models(self):
+        """실측: 추론에만 254~406 토큰을 쓴다. 기본값이 그보다 한참 커야 한다."""
+        self.assertGreaterEqual(self.spec["default"], 1024)
+        self.assertLessEqual(self.spec["default"], self.spec["max"])
+
+    def test_tooltip_warns_about_reasoning_tokens(self):
+        """이 위젯을 작게 잡으면 빈 응답이 난다는 걸 여기서 알려야 한다."""
+        self.assertIn("추론", self.spec["tooltip"])
 
 
 class TestReasoningBudget(unittest.TestCase):
