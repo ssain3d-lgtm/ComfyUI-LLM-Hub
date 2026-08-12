@@ -171,6 +171,34 @@ def tail_lines(text: str, n: int = 20) -> str:
     return "\n".join(lines[-n:])
 
 
+def stage_media(paths, cwd: str) -> list:
+    """미디어 파일을 CLI 의 cwd 안으로 옮겨 상대경로로 참조할 수 있게 한다.
+
+    CLI 의 파일 읽기 툴은 작업 폴더 밖을 못 보는 경우가 많으므로,
+    cwd 밖에 있는 파일만 복사한다. 반환값은 cwd 기준 상대경로 리스트.
+    """
+    import shutil
+
+    staged = []
+    if not paths or not cwd:
+        return staged
+
+    root = os.path.realpath(cwd)
+    for path in paths:
+        try:
+            real = os.path.realpath(path)
+            if real == root or real.startswith(root + os.sep):
+                staged.append(os.path.relpath(real, root))
+                continue
+            dest = os.path.join(root, os.path.basename(real))
+            if os.path.realpath(dest) != real:
+                shutil.copyfile(real, dest)
+            staged.append(os.path.relpath(dest, root))
+        except OSError:
+            continue
+    return staged
+
+
 def unsupported_note(backend: str, *names: str) -> str:
     """미지원 파라미터를 debug 에 남길 문구 (DESIGN §5-5)."""
     if not names:

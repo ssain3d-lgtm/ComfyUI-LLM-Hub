@@ -10,17 +10,18 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import sys
 
-# 패키지로 import 할 수 있도록 상위 폴더를 경로에 넣는다.
+# 패키지 이름에 하이픈이 있어 일반 import 문을 쓸 수 없다 → importlib 로 불러온다.
 _PACK_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(_PACK_ROOT))
 _PACK_NAME = os.path.basename(_PACK_ROOT)
 
-_pack = __import__(_PACK_NAME, fromlist=["backends"])
-get_backend = _pack.backends.get_backend
-LLMRequest = _pack.backends.LLMRequest
+_backends = importlib.import_module(f"{_PACK_NAME}.backends")
+get_backend = _backends.get_backend
+LLMRequest = _backends.LLMRequest
 
 
 def main() -> int:

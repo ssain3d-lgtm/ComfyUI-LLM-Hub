@@ -31,6 +31,11 @@ DEFAULTS = {
         # Gemini CLI 의 승인 모드. "plan" = 읽기 전용(실측 §8.4).
         # 응답 형식이 계획서처럼 나오면 "default" 로 바꿀 수 있게 열어둔다.
         "gemini_approval_mode": "plan",
+        # claude 시스템 프롬프트 적용 방식.
+        #   "append"  = Claude Code 기본 시스템 프롬프트에 덧붙임(도구 사용 능력 유지)
+        #   "replace" = 기본 프롬프트를 통째로 교체(스타일 지시를 강하게 먹이고 싶을 때)
+        # 실측: append 모드에서는 기본 프롬프트가 강해 문체/언어 지시가 희석될 수 있다.
+        "claude_system_prompt_mode": "append",
     },
     "tool_loop_max_iters": 8,
     "max_file_read_bytes": 262144,
