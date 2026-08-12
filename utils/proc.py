@@ -205,11 +205,16 @@ def cleanup_dir(path: str) -> None:
         pass
 
 
-def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300, on_line=None):
+def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300,
+                   on_line=None, should_stop=None):
     """run_cli 와 같지만 stdout 을 한 줄씩 읽으며 on_line(line) 을 호출한다.
 
     스트리밍 출력(JSONL/SSE)을 실시간으로 노드에 흘려보내기 위한 변형이다.
     반환값은 run_cli 와 동일한 (exit_code, stdout, stderr, duration_s).
+
+    should_stop 을 주면 그것이 참이 되는 즉시 프로세스 트리를 죽이고 돌아온다.
+    proc.wait(timeout=timeout_s) 로 한 번에 기다리면 Stop 을 눌러도 타임아웃까지
+    (기본 300초) 붙잡혀 있으므로, 짧게 끊어 기다리며 중간에 확인한다.
     """
     import threading
 
@@ -267,10 +272,29 @@ def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 30
         thread.start()
 
     timed_out = False
-    try:
-        proc.wait(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        timed_out = True
+    stopped = False
+    deadline = started + timeout_s
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            timed_out = True
+            break
+        if should_stop is not None:
+            try:
+                if should_stop():
+                    stopped = True
+                    break
+            except Exception:
+                # 판정이 터져도 생성을 막지는 않는다.
+                pass
+        try:
+            # 0.2초씩 끊어 기다린다. Stop 반응 속도와 폴링 비용의 타협점이다.
+            proc.wait(timeout=min(0.2, remaining))
+            break
+        except subprocess.TimeoutExpired:
+            continue
+
+    if timed_out or stopped:
         _kill_tree(proc)
         try:
             proc.wait(timeout=10)

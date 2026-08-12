@@ -60,7 +60,10 @@ class RecordingEmitter:
 class StreamFake(FakeCli):
     """stdout 을 줄 단위로 on_line 에 흘려주는 run_cli_stream 대역."""
 
-    def __call__(self, args, *, cwd, stdin_text=None, timeout_s=300, on_line=None):
+    # should_stop 은 Stop 버튼용으로 나중에 붙은 선택 인자다. 더미가 이걸 못 받으면
+    # 호출이 TypeError 로 죽고, 백엔드가 그것을 삼켜 "스트리밍을 안 쓴 것"처럼 보인다.
+    def __call__(self, args, *, cwd, stdin_text=None, timeout_s=300, on_line=None,
+                 should_stop=None):
         self.args = list(args)
         self.cwd = cwd
         self.stdin = stdin_text

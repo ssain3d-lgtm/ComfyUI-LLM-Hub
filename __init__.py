@@ -2,6 +2,10 @@
 """ComfyUI-LLM-Hub — LLM 백엔드 선택형 텍스트 생성 노드팩."""
 
 from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .server_routes import register as _register_routes
+
+# 노드의 Stop 버튼이 쓰는 경로. ComfyUI 밖에서는 조용히 건너뛴다.
+_register_routes()
 
 # 노드 위 실시간 모니터링 창(web/js/llmhub_monitor.js)을 ComfyUI 가 로드하게 한다.
 #
