@@ -153,11 +153,44 @@ def _kill_tree(proc) -> None:
         pass
 
 
-def run_cli(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300):
+def _register(node_id, proc):
+    """실행 중 프로세스를 중단 레지스트리에 올린다.
+
+    이걸 해야 Stop 이 프로세스를 직접 죽일 수 있다. 스트리밍 경로는 should_stop
+    폴링으로도 멈추지만, 비스트리밍(run_cli)은 폴링 지점이 없어 등록이 유일한
+    중단 수단이다. cancel 은 여기서 지연 import 한다 -- cancel 쪽이 _kill_tree 를
+    쓰므로 모듈 최상단에서 서로 부르면 순환이 된다.
+    """
+    if node_id is None:
+        return
+    try:
+        from . import cancel
+
+        cancel.register_process(node_id, proc)
+    except Exception:
+        pass
+
+
+def _unregister(node_id):
+    if node_id is None:
+        return
+    try:
+        from . import cancel
+
+        cancel.unregister_process(node_id)
+    except Exception:
+        pass
+
+
+def run_cli(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300, node_id=None):
     """CLI 를 실행하고 (exit_code, stdout, stderr, duration_s) 를 돌려준다.
 
     타임아웃이면 exit_code = -1, stderr 에 "error: timeout(Ns)" 를 채운다.
     좀비 프로세스가 남지 않도록 트리 전체를 kill 후 반드시 회수한다 (T5).
+
+    node_id 를 주면 실행 중 프로세스를 중단 레지스트리에 등록한다. 이 경로는
+    스트리밍이 아니라 중간 폴링 지점이 없으므로, Stop 이 프로세스를 직접 죽이는
+    것이 유일한 중단 방법이다.
     """
     started = time.time()
     proc = subprocess.Popen(
@@ -173,21 +206,25 @@ def run_cli(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300):
         creationflags=_creation_flags(),
     )
 
+    _register(node_id, proc)
     try:
-        stdout, stderr = proc.communicate(input=stdin_text, timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        _kill_tree(proc)
         try:
-            # kill 후 파이프를 비워 좀비/파이프 잔류를 방지한다.
-            stdout, stderr = proc.communicate(timeout=10)
-        except Exception:
-            stdout, stderr = "", ""
-        duration = time.time() - started
-        stderr = (stderr or "") + f"\nerror: timeout({timeout_s}s)"
-        return -1, stdout or "", stderr, duration
+            stdout, stderr = proc.communicate(input=stdin_text, timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            try:
+                # kill 후 파이프를 비워 좀비/파이프 잔류를 방지한다.
+                stdout, stderr = proc.communicate(timeout=10)
+            except Exception:
+                stdout, stderr = "", ""
+            duration = time.time() - started
+            stderr = (stderr or "") + f"\nerror: timeout({timeout_s}s)"
+            return -1, stdout or "", stderr, duration
 
-    duration = time.time() - started
-    return proc.returncode, stdout or "", stderr or "", duration
+        duration = time.time() - started
+        return proc.returncode, stdout or "", stderr or "", duration
+    finally:
+        _unregister(node_id)
 
 
 def make_empty_dir() -> str:
@@ -206,7 +243,7 @@ def cleanup_dir(path: str) -> None:
 
 
 def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 300,
-                   on_line=None, should_stop=None):
+                   on_line=None, should_stop=None, node_id=None):
     """run_cli 와 같지만 stdout 을 한 줄씩 읽으며 on_line(line) 을 호출한다.
 
     스트리밍 출력(JSONL/SSE)을 실시간으로 노드에 흘려보내기 위한 변형이다.
@@ -215,6 +252,9 @@ def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 30
     should_stop 을 주면 그것이 참이 되는 즉시 프로세스 트리를 죽이고 돌아온다.
     proc.wait(timeout=timeout_s) 로 한 번에 기다리면 Stop 을 눌러도 타임아웃까지
     (기본 300초) 붙잡혀 있으므로, 짧게 끊어 기다리며 중간에 확인한다.
+
+    node_id 를 주면 프로세스를 중단 레지스트리에도 올린다. 폴링은 최대 0.2초를
+    기다리지만 등록해 두면 Stop 이 곧바로 죽인다.
     """
     import threading
 
@@ -263,6 +303,8 @@ def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 30
         except Exception:
             pass
 
+    _register(node_id, proc)
+
     threads = [
         threading.Thread(target=feed_stdin, daemon=True),
         threading.Thread(target=pump_stdout, daemon=True),
@@ -303,6 +345,8 @@ def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 30
 
     for thread in threads:
         thread.join(timeout=5)
+
+    _unregister(node_id)
 
     duration = time.time() - started
     stdout = "".join(out_chunks)

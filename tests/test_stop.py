@@ -254,5 +254,69 @@ class TestRouteAndButton(unittest.TestCase):
         self.assertIn("this.setRunning(!done)", javascript)
 
 
+class TestNonStreamingStop(unittest.TestCase):
+    """비스트리밍(run_cli) 경로도 Stop 이 들어야 한다.
+
+    이 경로에는 should_stop 폴링 지점이 없다. 프로세스를 중단 레지스트리에
+    등록해 두는 것이 유일한 중단 수단인데, 등록 배선이 빠져 있으면
+    Stop 을 눌러도 타임아웃(기본 300초)까지 그대로 붙잡힌다.
+    """
+
+    def setUp(self):
+        cancel.begin("nonstream")
+
+    def tearDown(self):
+        cancel.begin("nonstream")
+
+    def test_run_cli_registers_process(self):
+        """실행 중에 레지스트리에서 프로세스를 찾을 수 있어야 한다."""
+        seen = {}
+
+        def watcher():
+            # 프로세스가 뜰 때까지 잠깐 기다렸다가 중지를 건다
+            for _ in range(100):
+                with cancel._LOCK:
+                    proc = cancel._PROCS.get("nonstream")
+                if proc is not None:
+                    seen["registered"] = True
+                    break
+                time.sleep(0.05)
+            cancel.request_stop("nonstream")
+
+        thread = threading.Thread(target=watcher, daemon=True)
+        thread.start()
+
+        started = time.time()
+        code, _out, _err, _dur = proc_mod.run_cli(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            cwd=None, stdin_text=None, timeout_s=300, node_id="nonstream",
+        )
+        elapsed = time.time() - started
+        thread.join(timeout=5)
+
+        self.assertTrue(seen.get("registered"), "실행 중 프로세스가 등록되지 않았다")
+        self.assertNotEqual(code, 0, "중지됐는데 정상 종료로 보고됐다")
+        # 타임아웃(300초)까지 붙잡히지 않고 곧바로 끝나야 한다
+        self.assertLess(elapsed, 30, f"Stop 이 듣지 않았다 ({elapsed:.1f}s 걸림)")
+
+    def test_unregistered_after_completion(self):
+        """정상 종료 뒤에는 레지스트리가 비어야 한다(누수 방지)."""
+        proc_mod.run_cli(
+            [sys.executable, "-c", "pass"],
+            cwd=None, stdin_text=None, timeout_s=30, node_id="nonstream",
+        )
+        with cancel._LOCK:
+            self.assertIsNone(cancel._PROCS.get("nonstream"))
+
+    def test_no_node_id_still_works(self):
+        """node_id 를 안 주면 등록 없이 그대로 동작해야 한다."""
+        code, out, _err, _dur = proc_mod.run_cli(
+            [sys.executable, "-c", "print('ok')"],
+            cwd=None, stdin_text=None, timeout_s=30,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "ok")
+
+
 if __name__ == "__main__":
     unittest.main()

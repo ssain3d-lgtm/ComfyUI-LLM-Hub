@@ -41,7 +41,7 @@ class FakeCli:
         self.cwd = None
         self.stdin = None
 
-    def __call__(self, args, *, cwd, stdin_text=None, timeout_s=300):
+    def __call__(self, args, *, cwd, stdin_text=None, timeout_s=300, node_id=None):
         self.args = list(args)
         self.cwd = cwd
         self.stdin = stdin_text
