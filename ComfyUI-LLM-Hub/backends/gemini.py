@@ -9,6 +9,9 @@
     ("Approval mode overridden to default because the current folder is not trusted").
     --skip-trust 를 함께 줘야 plan 모드가 유지된다.
   - -o json 출력 형태: {"session_id": ..., "response": ...} / 오류 시 {"error": {...}}
+
+비디오: 4개 백엔드 중 유일하게 네이티브 지원. CLI 가 video/* 파일을 inlineData 로
+        모델에 넘긴다(read_file/read_many_files 경로). 프레임 추출 없이 파일을 그대로 참조한다.
 """
 
 from __future__ import annotations
@@ -86,7 +89,11 @@ class GeminiBackend(BaseBackend):
 
             args += parse_extra_args(req.extra_args)
 
-            staged = stage_media(req.image_paths, cwd)
+            # Gemini 는 비디오를 네이티브로 읽는다 → 파일 그대로 넘긴다.
+            media = list(req.image_paths or []) + list(req.video_paths or [])
+            staged = stage_media(media, cwd)
+            if req.video_paths:
+                notes.append(f"gemini: 비디오 {len(req.video_paths)}개를 네이티브로 전달")
             prompt = _build_prompt(req, staged)
             notes.append(unsupported_note("gemini", "temperature", "max_tokens"))
 

@@ -7,6 +7,9 @@
   - 프롬프트는 stdin 파이프로 전달된다 (실측 확인).
   - --output-format json 의 결과 JSON: result / is_error / usage / total_cost_usd
   - --max-turns 플래그는 현재 CLI 에 없다 → 사용하지 않는다.
+
+비디오: Claude 는 비디오 입력을 지원하지 않는다(Read 툴은 이미지/PDF 만).
+        → 프레임을 뽑아 이미지로 전달한다.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from .base import (
     LLMResponse,
     detect_login_error,
     detect_rate_limit,
+    frames_for_unsupported_video,
     stage_media,
     tail_lines,
     truncate_debug,
@@ -89,7 +93,12 @@ class ClaudeCodeBackend(BaseBackend):
 
             # 이미지는 cwd 안에 있어야 Read 툴이 볼 수 있다. file_access=False 라도
             # 이미지가 있으면 Read 만 열어준다(워크스페이스 노출 없음).
-            staged = stage_media(req.image_paths, cwd)
+            media = list(req.image_paths or [])
+            if req.video_paths:
+                frames, video_notes = frames_for_unsupported_video(req, "claude", cwd)
+                media += frames
+                notes.extend(video_notes)
+            staged = stage_media(media, cwd)
             if req.file_access:
                 allowed = READ_ONLY_TOOLS
             elif staged:

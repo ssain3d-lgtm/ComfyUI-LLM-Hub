@@ -37,6 +37,9 @@ def main() -> int:
         "--file-access", action="store_true", help="워크스페이스 파일 읽기 허용"
     )
     parser.add_argument("--image", action="append", default=[], help="이미지 경로 (반복 가능)")
+    parser.add_argument("--video", default="", help="비디오 파일 경로")
+    parser.add_argument("--video-max-frames", type=int, default=8,
+                        help="비디오 미지원 백엔드에서 뽑을 프레임 수")
     parser.add_argument("--mcp-config", default="")
     parser.add_argument("--extra-args", default="")
     parser.add_argument("--temperature", type=float, default=0.7)
@@ -46,6 +49,7 @@ def main() -> int:
 
     workspace = os.path.abspath(args.workspace) if args.workspace else ""
     images = [os.path.abspath(p) for p in args.image]
+    videos = [os.path.abspath(args.video)] if args.video else []
 
     req = LLMRequest(
         backend=args.backend,
@@ -53,6 +57,8 @@ def main() -> int:
         system_prompt=args.system,
         user_prompt=args.prompt,
         image_paths=images,
+        video_paths=videos,
+        video_max_frames=args.video_max_frames,
         workspace_dir=workspace,
         file_access=bool(args.file_access),
         mcp_config=args.mcp_config,

@@ -11,6 +11,7 @@ import base64
 import json
 import os
 import time
+from dataclasses import replace
 
 from ..utils import fs_tools
 from ..utils.config import load_config
@@ -19,6 +20,7 @@ from .base import (
     LLMRequest,
     LLMResponse,
     detect_rate_limit,
+    frames_for_unsupported_video,
     truncate_debug,
     validate_workspace,
     workspace_hint,
@@ -136,6 +138,15 @@ class LMStudioBackend(BaseBackend):
             )
 
         model = (req.model or "").strip() or self.default_model
+
+        # OpenAI 호환 chat/completions 에는 비디오 콘텐츠 타입이 없다.
+        # → 프레임을 뽑아 이미지로 넣는다 (VLM 모델 필요).
+        if req.video_paths:
+            frames, video_notes = frames_for_unsupported_video(req, "lmstudio")
+            debug_notes.extend(video_notes)
+            if frames:
+                req = replace(req, image_paths=list(req.image_paths or []) + frames)
+
         messages = self._build_messages(req)
 
         try:

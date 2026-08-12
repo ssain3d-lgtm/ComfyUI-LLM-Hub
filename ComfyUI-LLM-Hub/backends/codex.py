@@ -9,6 +9,9 @@
   - -o/--output-last-message 로 최종 메시지를 파일에 직접 받을 수 있다(실측).
     stdout 파싱보다 안정적이므로 이 경로를 기본으로 쓴다.
   - -s read-only 로 읽기 허용/쓰기 차단.
+
+비디오: Codex 는 비디오 입력을 지원하지 않는다(-i 는 이미지 전용).
+        → 프레임을 뽑아 -i 로 전달한다.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from .base import (
     LLMResponse,
     detect_login_error,
     detect_rate_limit,
+    frames_for_unsupported_video,
     merge_system_prompt,
     tail_lines,
     truncate_debug,
@@ -67,7 +71,12 @@ class CodexBackend(BaseBackend):
             if (req.model or "").strip():
                 args += ["-m", req.model.strip()]
 
-            for path in req.image_paths or []:
+            media = list(req.image_paths or [])
+            if req.video_paths:
+                frames, video_notes = frames_for_unsupported_video(req, "codex", cwd)
+                media += frames
+                notes.extend(video_notes)
+            for path in media:
                 args += ["-i", path]
 
             args += ["-o", last_message_path]

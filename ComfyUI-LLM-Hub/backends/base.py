@@ -23,6 +23,8 @@ class LLMRequest:
     system_prompt: str
     user_prompt: str
     image_paths: list = field(default_factory=list)  # 절대경로 PNG
+    video_paths: list = field(default_factory=list)  # 절대경로 비디오 파일
+    video_max_frames: int = 8   # 비디오 미지원 백엔드에서 뽑을 프레임 수
     workspace_dir: str = ""
     file_access: bool = False
     mcp_config: str = ""  # JSON 파일 경로 또는 ""
@@ -197,6 +199,23 @@ def stage_media(paths, cwd: str) -> list:
         except OSError:
             continue
     return staged
+
+
+def frames_for_unsupported_video(req: LLMRequest, backend_name: str, out_dir: str = "") -> tuple:
+    """비디오를 지원하지 않는 백엔드용: 프레임을 뽑아 이미지 경로로 돌려준다.
+
+    반환: (프레임 PNG 경로 리스트, 안내 메시지 리스트)
+    """
+    from ..utils import video_io
+
+    frames, notes = [], []
+    for path in req.video_paths or []:
+        target_dir = out_dir or os.path.join(os.path.dirname(path), "_llmhub_frames")
+        extracted, message = video_io.extract_frames(path, req.video_max_frames, target_dir)
+        if message:
+            notes.append(f"{backend_name}: 비디오 미지원 → {message}")
+        frames.extend(extracted)
+    return frames, notes
 
 
 def unsupported_note(backend: str, *names: str) -> str:
