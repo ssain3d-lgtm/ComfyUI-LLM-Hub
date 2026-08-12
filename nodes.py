@@ -13,6 +13,14 @@ from .utils import image_io, stream, video_io
 # lmstudio_model 드롭다운의 첫 항목 (= 노드의 model 칸/설정을 따름)
 AUTO_MODEL = "(auto)"
 
+# claude CLI 의 --model 별칭. 실측으로 확인한 것만 넣는다 (claude --help 의 예시는
+# 전부가 아니다). 각각 실제로 무엇으로 풀리는지는 2026-08-12 기준:
+#   haiku -> claude-haiku-4-5-20251001 / opus -> claude-opus-5
+#   sonnet -> claude-sonnet-5          / fable -> claude-fable-5
+# 별칭을 쓰면 최신판을 따라가므로 날짜 박힌 전체 이름보다 오래 간다.
+# 목록에 없는 모델은 위의 model 칸에 전체 이름을 직접 적으면 된다.
+CLAUDE_MODELS = [AUTO_MODEL, "haiku", "opus", "sonnet", "fable"]
+
 
 def _ls_default(key, fallback):
     """config.json 의 lmstudio 설정을 위젯 기본값으로 쓴다.
@@ -61,8 +69,14 @@ class LLMHubGenerate:
                     {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05,
                      "tooltip": "창의성(0=일관, 높을수록 다양). lmstudio 에만 적용, CLI 3종은 무시."},
                 ),
-                "max_tokens": ("INT", {"default": 2048, "min": 1, "max": 32768,
-                    "tooltip": "최대 생성 토큰. lmstudio 에만 적용, CLI 3종은 무시."}),
+                # 상한은 32768 이었는데 근거가 없었다. LM Studio 에 올라와 있는 모델들의
+                # max_context_length 를 조회해보면 전부 262144 라, 위젯이 실제 능력의
+                # 1/8 에서 막고 있었다. 상한만 키우는 것이라 저장된 워크플로우는 영향이 없다.
+                "max_tokens": ("INT", {"default": 2048, "min": 1, "max": 262144,
+                    "tooltip": "최대 생성 토큰. lmstudio 에만 적용, CLI 3종은 무시. "
+                               "추론 모델은 답을 쓰기 전에 숨은 사고 과정을 먼저 뱉고 "
+                               "그 분량도 여기 포함되므로, 작게 잡으면 본문이 빈 채로 "
+                               "잘린다. 1000 이상을 권한다."}),
                 "timeout_sec": ("INT", {"default": 300, "min": 10, "max": 3600,
                     "tooltip": "제한 시간(초). CLI 는 콜드스타트에 몇 초 걸리니 넉넉히."}),
                 # seed 값 자체는 사용하지 않는다 (DESIGN §5-4).
@@ -106,6 +120,13 @@ class LLMHubGenerate:
                 "lmstudio_unload_after": ("BOOLEAN", {"default": _ls_default("unload_after", True),
                     "tooltip": "[lmstudio 전용] 응답 직후 즉시 VRAM 해제(lms CLI 필요). "
                                "반복 호출이 잦으면 꺼서 재로드를 피할 수 있다."}),
+                # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
+                "claude_model": (CLAUDE_MODELS, {
+                    "tooltip": "[claude 전용] 모델 선택. (auto)=위 model 칸/CLI 기본값. "
+                               "비용은 haiku < opus < sonnet < fable 순으로 커진다"
+                               "(실측 2026-08-12, 같은 호출 기준 haiku 는 opus 의 약 1/3). "
+                               "속도는 모델을 바꿔도 별 차이가 없다 — 매 호출의 약 2초가 "
+                               "claude CLI 를 새로 띄우는 고정비라 그쪽이 병목이다."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -145,6 +166,7 @@ class LLMHubGenerate:
         lmstudio_model=AUTO_MODEL,
         lmstudio_ttl_sec=300,
         lmstudio_unload_after=True,
+        claude_model=AUTO_MODEL,
         image=None,
         video=None,
         video_path="",
@@ -181,10 +203,14 @@ class LLMHubGenerate:
             )
             emitter.set_status(f"{backend} 준비 중...")
 
-            # lmstudio 드롭다운에서 고른 모델이 있으면 그쪽이 우선한다.
+            # 백엔드별 드롭다운에서 고른 모델이 있으면 그쪽이 우선한다.
+            # 드롭다운은 그 백엔드에서만 본다 — claude 를 쓰는데 lmstudio_model 이
+            # 남아 있다고 그걸 집어가면 안 된다.
             chosen_model = (model or "").strip()
             if backend == "lmstudio" and lmstudio_model and lmstudio_model != AUTO_MODEL:
                 chosen_model = lmstudio_model
+            elif backend == "claude" and claude_model and claude_model != AUTO_MODEL:
+                chosen_model = claude_model
 
             req = LLMRequest(
                 backend=backend,

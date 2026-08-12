@@ -51,7 +51,7 @@ class GeminiBackend(BaseBackend):
     def __init__(self, config: dict = None):
         self.config = config or load_config()
         defaults = self.config.get("defaults", {}) or {}
-        self.default_model = defaults.get("gemini_model") or "gemini-2.5-flash"
+        self.default_model = defaults.get("gemini_model") or "gemini-3-flash"
         self.approval_mode = defaults.get("gemini_approval_mode") or "plan"
 
     def generate(self, req: LLMRequest) -> LLMResponse:

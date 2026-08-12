@@ -25,11 +25,17 @@ class MockLMStudio:
       {"tool_calls": [{"name": ..., "path": ...}]}  -> 툴 호출 요청
     """
 
-    def __init__(self, script=None, models=None, fail_without_model=False, sse=False):
+    def __init__(self, script=None, models=None, fail_without_model=False, sse=False,
+                 require_token=""):
         self.sse = sse
         self.script = list(script or [{"content": "OK"}])
         self.models = models or ["mock-model-a", "mock-model-b"]
         self.fail_without_model = fail_without_model
+        # 빈 문자열이면 인증을 요구하지 않는다(기존 테스트 동작 그대로).
+        # LM Studio 는 "Enable API key" 를 켜면 /v1/models 까지 401 로 막는다.
+        self.require_token = require_token
+        # /api/v0/models 용. None 이면 이 엔드포인트를 404 로 둔다(= /v1 만 있는 서버).
+        self.v0_models = None
         self.requests = []  # 서버가 받은 payload 기록 (검증용)
         self._index = 0
         self._server = None
@@ -52,7 +58,23 @@ class MockLMStudio:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _authorized(self):
+                if not outer.require_token:
+                    return True
+                if self.headers.get("Authorization") == "Bearer " + outer.require_token:
+                    return True
+                self._send_json(401, {"error": "unauthorized"})
+                return False
+
             def do_GET(self):
+                if not self._authorized():
+                    return
+                if self.path.rstrip("/") == "/api/v0/models":
+                    if outer.v0_models is None:
+                        self._send_json(404, {"error": "not found"})
+                    else:
+                        self._send_json(200, {"data": outer.v0_models})
+                    return
                 if self.path.rstrip("/") == "/v1/models":
                     self._send_json(
                         200, {"data": [{"id": mid} for mid in outer.models]}

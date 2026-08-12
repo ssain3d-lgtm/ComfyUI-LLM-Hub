@@ -15,6 +15,10 @@ import threading
 _PACK_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(_PACK_ROOT, "config.json")
 EXAMPLE_PATH = os.path.join(_PACK_ROOT, "config.example.json")
+# 토큰을 파일 하나로 따로 두는 경로. config.json 과 달리 이 파일은 내용 전체가 토큰이라
+# 실수로 통째 붙여넣기 어렵고, 다른 노드팩과도 같은 관례를 쓸 수 있다.
+TOKEN_PATH = os.path.join(_PACK_ROOT, "lm_studio_token.txt")
+TOKEN_ENV_VAR = "LM_STUDIO_API_KEY"
 
 _LOCK = threading.Lock()
 _CACHE = None
@@ -34,7 +38,12 @@ DEFAULTS = {
     # lms 는 LM Studio 의 CLI (즉시 언로드에 사용)
     "cli_paths": {"claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms"},
     "defaults": {
-        "gemini_model": "gemini-2.5-flash",
+        # 실측(2026-08-12, gemini-cli 0.55.1): "gemini-3-flash" 는 CLI 가
+        # gemini-3.5-flash 로 풀어준다. 별칭이라 최신판을 따라가므로 버전을 박은
+        # 이름보다 오래 간다. 참고로 CLI 기본값은 gemini-3.1-flash-lite 라
+        # 이 값을 비워두면 더 작은 모델이 붙는다.
+        # 노드의 model 칸에 적으면 이 값보다 우선한다.
+        "gemini_model": "gemini-3-flash",
         # Gemini CLI 의 승인 모드. "plan" = 읽기 전용(실측 §8.4).
         # 응답 형식이 계획서처럼 나오면 "default" 로 바꿀 수 있게 열어둔다.
         "gemini_approval_mode": "plan",
@@ -79,6 +88,41 @@ def load_config(force_reload: bool = False) -> dict:
 
         _CACHE = _deep_merge(DEFAULTS, user_cfg)
         return _CACHE
+
+
+def resolve_api_token(cfg: dict = None) -> str:
+    """LM Studio 의 API 토큰을 찾아 돌려준다 (없으면 빈 문자열).
+
+    LM Studio 의 "Enable API key" 를 켜면 /v1/models 까지 401 이 된다. 그러면
+    모델 목록이 빈 리스트가 되고 노드의 lmstudio_model 콤보에는 "(auto)" 하나만
+    남아 — 드롭다운이 아예 안 뜬 것처럼 보인다. 그래서 토큰을 config.json 한 곳에서만
+    찾으면 안 된다: 런처가 환경변수로 넣어두는 설치가 흔하다.
+
+    찾는 순서:
+      1. config.json 의 lmstudio.api_token   (명시적으로 적었으면 그게 우선)
+      2. 환경변수 LM_STUDIO_API_KEY          (런처/셸에서 주입)
+      3. lm_studio_token.txt                 (파일 내용 전체가 토큰)
+
+    돌려준 값은 절대 로그·debug 출력에 실으면 안 된다 (DESIGN §10).
+    """
+    if cfg is None:
+        cfg = load_config()
+    token = ((cfg.get("lmstudio", {}) or {}).get("api_token") or "").strip()
+    if token:
+        return token
+
+    token = (os.environ.get(TOKEN_ENV_VAR) or "").strip()
+    if token:
+        return token
+
+    try:
+        if os.path.exists(TOKEN_PATH):
+            with open(TOKEN_PATH, "r", encoding="utf-8") as fh:
+                # 파일 끝 줄바꿈이 그대로 헤더에 들어가면 서버가 토큰을 거부한다.
+                return fh.read().strip()
+    except Exception:
+        pass
+    return ""
 
 
 def get_cli_path(name: str) -> str:
