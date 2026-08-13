@@ -9,6 +9,11 @@ import { api } from "../../scripts/api.js";
 const NODE_NAME = "LLMHubGenerate";
 const EVENT_NAME = "llmhub.stream";
 
+// version.py 와 같은 값이어야 한다(테스트로 고정). 진단할 때 제일 먼저 묻는 게
+// "브라우저가 지금 몇 버전 JS 를 들고 있느냐" 인데, 캐시된 옛 파일이 남아 있으면
+// 파이썬만 새 버전이고 화면은 옛날인 상태가 된다. 그때 이 줄이 답을 준다.
+const VERSION = "1.1.0";
+
 // 패널은 노드 객체에 직접 붙인다.
 // onNodeCreated 시점에는 node.id 가 아직 -1 이라(그래프 추가 시 배정됨)
 // id 를 키로 Map 에 넣어두면 이벤트의 실제 id 와 영원히 매칭되지 않는다.
@@ -132,8 +137,43 @@ function renderMarkdown(source) {
 }
 
 // --------------------------------------------------------------------------
+// 클립보드
+// --------------------------------------------------------------------------
+// navigator.clipboard 는 "보안 컨텍스트" 에서만 존재한다. localhost 는 예외라
+// 있지만, ComfyUI 를 http://192.168.x.x:8188 처럼 LAN 주소로 열면 아예 없다.
+// 그래서 구식 execCommand 폴백을 남겨둔다.
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (error) {
+    // 권한 거부 등 — 아래 폴백으로 내려간다
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    // 화면 밖으로 밀면 iOS 가 스크롤을 튕긴다. 제자리에 두고 투명하게 만든다.
+    area.style.position = "fixed";
+    area.style.top = "0";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    return ok;
+  } catch (error) {
+    return false;
+  }
+}
+
+// --------------------------------------------------------------------------
 // 패널 생성
 // --------------------------------------------------------------------------
+
+// 모니터 창 높이. stream_view=off 로 숨길 때 되돌릴 값이라 모듈 범위에 둔다.
+const PANEL_HEIGHT = 240;
 
 function createPanel(node) {
   const root = document.createElement("div");
@@ -142,6 +182,7 @@ function createPanel(node) {
     <div class="llmhub-head">
       <span class="llmhub-status">대기 중</span>
       <span class="llmhub-meta"></span>
+      <button class="llmhub-copy" type="button" title="생성된 텍스트를 클립보드에 복사합니다">복사</button>
       <button class="llmhub-stop" type="button" title="이 노드의 생성을 중지합니다">■ Stop</button>
     </div>
     <div class="llmhub-body"></div>
@@ -151,11 +192,28 @@ function createPanel(node) {
   const metaEl = root.querySelector(".llmhub-meta");
   const bodyEl = root.querySelector(".llmhub-body");
   const stopEl = root.querySelector(".llmhub-stop");
+  const copyEl = root.querySelector(".llmhub-copy");
 
   // 캔버스가 이 클릭을 노드 드래그로 삼키지 않게 한다.
   for (const name of ["pointerdown", "mousedown", "click"]) {
     stopEl.addEventListener(name, (event) => event.stopPropagation());
+    copyEl.addEventListener(name, (event) => event.stopPropagation());
   }
+
+  let copyTimer = null;
+  copyEl.addEventListener("click", async () => {
+    const text = control.lastText || "";
+    // 빈 값을 쓰면 클립보드에 들어 있던 것이 조용히 지워진다.
+    let label;
+    if (!text) label = "내용 없음";
+    else label = (await copyToClipboard(text)) ? "복사됨" : "복사 실패";
+
+    copyEl.textContent = label;
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => {
+      copyEl.textContent = "복사";
+    }, 1200);
+  });
   stopEl.addEventListener("click", async () => {
     stopEl.disabled = true;
     stopEl.textContent = "중지 중...";
@@ -236,7 +294,6 @@ function createPanel(node) {
   // 위젯도 `computeLayoutSize = () => ({minHeight, minWidth})` 를 쓴다). computeSize
   // 만 주면 무시돼서 패널이 엉뚱한 높이로 잡히고 위 위젯을 덮는다.
   // 옛 프론트엔드는 computeSize 를 보므로 둘 다 둔다.
-  const PANEL_HEIGHT = 240;
   widget.computeSize = (width) => [width, PANEL_HEIGHT];
   widget.computeLayoutSize = () => ({ minHeight: PANEL_HEIGHT, minWidth: 200 });
 
@@ -256,6 +313,30 @@ function createPanel(node) {
 function viewMode(node) {
   const widget = node.widgets?.find((w) => w.name === "stream_view");
   return widget ? widget.value : "plain";
+}
+
+// stream_view 를 off 로 두면 스트리밍 자체를 하지 않는다. 그런데 지금까지는
+// 빈 패널이 240px 를 그대로 차지하고 있었다 -- 끄는 이유가 보통 "노드를 작게
+// 쓰려고" 인데 정작 제일 큰 것이 안 없어지니 앞뒤가 안 맞는다.
+//
+// DOM 위젯이라 숨기는 방법이 위젯들과 다르다. 어느 프론트엔드가 무엇을 보는지
+// 확인할 수 없어 셋 다 건다: 실제 요소, 그리고 두 가지 크기 계산 API.
+function applyMonitorVisibility(node, mode) {
+  const widget = node[PANEL_KEY]?.widget;
+  if (!widget) return;
+
+  // mode 를 넘기는 쪽은 위젯 callback 이다. 위젯이 값을 먼저 쓰고 callback 을
+  // 부르는 게 관용이지만, 그 순서에 기대지 않으려고 값을 직접 받는다.
+  const hidden = (mode ?? viewMode(node)) === "off";
+  if (widget.element) widget.element.style.display = hidden ? "none" : "";
+  widget.hidden = hidden;
+  if (hidden) {
+    widget.computeSize = () => [0, -4];
+    widget.computeLayoutSize = () => ({ minHeight: 0, minWidth: 0 });
+  } else {
+    widget.computeSize = (width) => [width, PANEL_HEIGHT];
+    widget.computeLayoutSize = () => ({ minHeight: PANEL_HEIGHT, minWidth: 200 });
+  }
 }
 
 // backend 값에 따라 그 백엔드가 실제로 쓰는 위젯만 보인다.
@@ -366,6 +447,7 @@ function setupBackendToggle(node) {
       }
     }
 
+    applyMonitorVisibility(node);
     resizeToWidgets(node);
     node.setDirtyCanvas?.(true, true);
   };
@@ -454,6 +536,12 @@ app.registerExtension({
   name: "ComfyUI-LLM-Hub.Monitor",
 
   async setup() {
+    // 이 줄이 F12 콘솔에 없으면 JS 가 아예 로드되지 않은 것이다.
+    // (WEB_DIRECTORY 경로 문제로 실제로 겪었다 — 그때는 아무 흔적도 없었다.)
+    console.log(
+      `[LLM Hub] v${VERSION} 모니터 확장 로드됨. 진단: /llmhub/health`
+    );
+
     api.addEventListener(EVENT_NAME, (event) => {
       const data = event.detail || {};
       const [node, control] = panelFor(data.node);
@@ -509,8 +597,13 @@ app.registerExtension({
       const widget = this.widgets?.find((w) => w.name === "stream_view");
       if (widget) {
         const previous = widget.callback;
+        const node = this;
         widget.callback = function (value) {
           control.render(control.lastText, value);
+          // off 로 바꾸면 패널이 사라지고 노드도 그만큼 줄어야 한다.
+          applyMonitorVisibility(node, value);
+          resizeToWidgets(node);
+          node.setDirtyCanvas?.(true, true);
           return previous?.apply(this, arguments);
         };
       }
@@ -597,8 +690,10 @@ app.registerExtension({
 
 const style = document.createElement("style");
 style.textContent = `
-.llmhub-stop {
-  margin-left: auto;
+/* 복사와 Stop 을 오른쪽 끝에 한 덩어리로 붙인다. Stop 은 생성 중에만 보이므로
+   margin-left:auto 를 Stop 에 걸면 버튼 줄이 상태에 따라 좌우로 튄다. */
+.llmhub-copy { margin-left: auto; }
+.llmhub-copy, .llmhub-stop {
   padding: 1px 8px;
   font-size: 11px;
   line-height: 16px;
@@ -610,6 +705,7 @@ style.textContent = `
 }
 .llmhub-stop:hover:not(:disabled) { border-color: #c04040; color: #ff8080; }
 .llmhub-stop:disabled { opacity: 0.5; cursor: default; }
+.llmhub-copy:hover { border-color: #4a90d9; color: #8ab4f8; }
 
 /* 사고 과정은 답이 아니다 — 흐리고 기울여서 최종 결과와 한눈에 구분되게 한다. */
 .llmhub-body.llmhub-thinking {

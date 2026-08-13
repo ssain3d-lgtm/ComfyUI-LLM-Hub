@@ -190,5 +190,59 @@ class TestAdvancedButton(unittest.TestCase):
             self.assertIn("flags?.collapsed", body, f"{func}: 접힘 검사가 없다")
 
 
+class TestMonitorPanel(unittest.TestCase):
+    """모니터 창 자체의 표시/숨김과 부가 버튼."""
+
+    def setUp(self):
+        self.javascript = _javascript()
+
+    def test_off_hides_the_panel_three_ways(self):
+        """DOM 위젯은 일반 위젯과 숨기는 방법이 다르고, 프론트엔드마다 보는 게 다르다.
+
+        하나만 걸면 어떤 버전에서는 빈 패널이 240px 를 그대로 차지한다 —
+        stream_view 를 끄는 이유가 보통 '노드를 작게' 인데 앞뒤가 안 맞는다.
+        """
+        body = self.javascript.split("function applyMonitorVisibility", 1)[1]
+        body = body.split("\n}", 1)[0]
+        self.assertIn("element.style.display", body)
+        self.assertIn("widget.hidden", body)
+        self.assertIn("computeLayoutSize", body)
+        self.assertIn("computeSize", body)
+
+    def test_off_also_shrinks_the_node(self):
+        """패널만 숨고 노드 높이가 그대로면 빈칸이 남는다."""
+        body = self.javascript.split('w.name === "stream_view"', 1)[1]
+        body = body.split("\n      }", 1)[0]
+        self.assertIn("applyMonitorVisibility", body)
+        self.assertIn("resizeToWidgets", body)
+
+    def test_visibility_survives_a_workflow_reload(self):
+        """저장된 워크플로우를 열 때도 적용돼야 off 로 저장한 노드가 작게 열린다."""
+        body = self.javascript.split("const apply = () => {", 1)[1].split("\n  };", 1)[0]
+        self.assertIn("applyMonitorVisibility", body)
+
+    def test_copy_button_has_a_non_secure_context_fallback(self):
+        """navigator.clipboard 는 http://<LAN IP> 로 열면 아예 없다.
+
+        localhost 만 예외다. 폴백이 없으면 LAN 으로 접속하는 사람에게는
+        복사 버튼이 그냥 안 먹는 버튼이 된다.
+        """
+        self.assertIn("navigator.clipboard", self.javascript)
+        self.assertIn("execCommand", self.javascript)
+
+    def test_copy_never_writes_an_empty_clipboard(self):
+        """빈 값을 쓰면 클립보드에 들어 있던 것이 조용히 지워진다."""
+        body = self.javascript.split('copyEl.addEventListener("click"', 1)[1]
+        body = body.split("\n  });", 1)[0]
+        self.assertIn("if (!text)", body)
+
+    def test_panel_buttons_do_not_drag_the_node(self):
+        """캔버스가 클릭을 먼저 삼키면 버튼이 눌리지 않고 노드만 움직인다."""
+        body = self.javascript.split("캔버스가 이 클릭을", 1)[1].split("\n  }", 1)[0]
+        for element in ("stopEl", "copyEl"):
+            self.assertIn(f"{element}.addEventListener", body)
+        self.assertIn("stopPropagation", body)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ from __future__ import annotations
 from .utils import cancel
 
 ROUTE = "/llmhub/stop"
+HEALTH_ROUTE = "/llmhub/health"
 
 
 def register() -> bool:
@@ -37,5 +38,29 @@ def register() -> bool:
             return web.json_response({"ok": False, "error": "node 가 없습니다"}, status=400)
         cancel.request_stop(node_id)
         return web.json_response({"ok": True, "node": str(node_id)})
+
+    @instance.routes.get(HEALTH_ROUTE)
+    async def _health(request):
+        """브라우저에서 그냥 열어보는 자가 진단.
+
+        기본이 text/plain 인 이유: 이걸 여는 사람은 "뭐가 문제인지" 를 눈으로
+        읽으려는 것이지 JSON 을 파싱하려는 게 아니다. 기계용은 ?json=1.
+        """
+        from .utils import health
+
+        try:
+            report = health.collect()
+        except Exception as exc:  # 진단이 죽으면 진단할 방법이 없어진다
+            return web.json_response(
+                {"ok": False, "error": f"진단 실패: {exc!r}"}, status=500
+            )
+
+        if request.query.get("json"):
+            return web.json_response(report)
+        return web.Response(
+            text=health.as_text(report),
+            content_type="text/plain",
+            charset="utf-8",
+        )
 
     return True

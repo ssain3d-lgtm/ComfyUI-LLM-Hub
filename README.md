@@ -21,6 +21,12 @@ same node, switching between them without rewiring anything.
 > **Only `requests` is added to pip.** Everything else uses the standard library or
 > packages ComfyUI already ships.
 
+> **Note on language.** This pack was written for a Korean-speaking author, so the
+> **in-app text is Korean** — widget tooltips, `status` values, and error messages.
+> The English documentation below maps every one of them, and the widget names,
+> config keys and log output are all English. Full localization is not planned for
+> v1; if you want it, open an issue and say so.
+
 ## 1. Installation
 
 1. Clone this repository into ComfyUI's `custom_nodes` folder.
@@ -224,8 +230,9 @@ The node shows the text as it is being generated. Pick the mode with `stream_vie
 |---|---|
 | `plain` (default) | **For image prompts.** Shows exactly the characters the model produced, symbols like `**` included, so you can see the literal string that will reach CLIP Text Encode |
 | `markdown` | **For document summaries and analysis.** Renders headings, bullets and code blocks so it is easier to read |
-| `off` | No display. Streaming itself is skipped, so there is no overhead |
+| `off` | No display. Streaming is skipped entirely, and **the panel itself is removed** so the node shrinks |
 
+- The **`복사`** (copy) button in the panel header copies the generated text to the clipboard, so you can use it without wiring the `text` output anywhere.
 - You can **switch modes mid-generation**; it redraws immediately.
 - Scrolling up pauses auto-scroll; scrolling back to the bottom resumes it.
 - Backends that use tools show progress such as `도구 사용: Read` at the top.
@@ -303,8 +310,25 @@ never committed to git.)
 
 ## 7. Troubleshooting
 
+### Start here: the self-check page
+
+With ComfyUI running, open this in a browser:
+
+```
+http://127.0.0.1:8188/llmhub/health
+```
+
+It prints a plain-text report of everything the node actually depends on — whether
+each CLI resolves, whether ffmpeg or cv2 is available, whether LM Studio answers,
+whether the frontend JS is where ComfyUI will serve it from, and the version that is
+really running. `[FAIL]` marks a required item; `[ -- ]` is optional and only disables
+that one feature. Add `?json=1` for machine-readable output.
+
+Paste this report into any bug report — it answers most of the first round of questions.
+
 | status / symptom | Cause and fix |
 |---|---|
+| `git pull` says "Already up to date" but nothing changed | You are probably standing on a feature branch, not `main`. `git pull` only updates the branch you are on. Check with `git branch --show-current`, then `git checkout main` and pull again |
 | `error: LM Studio 서버 응답 없음` | LM Studio is not running, or the port differs. Check the Server tab |
 | `error: claude 로그인 필요` | Run `claude` once in a terminal and log in |
 | `error: codex 로그인 필요` | `codex login` |
@@ -316,7 +340,7 @@ never committed to git.)
 | `tool loop limit` in `debug` | LM Studio only kept calling tools. Raise `tool_loop_max_iters` or make the prompt more specific |
 | `unsupported: temperature` in `debug` | Expected. The CLI backends do not expose that parameter |
 | ffmpeg notice after adding a video | Install ffmpeg and add it to your PATH (§5) |
-| Monitor window does not appear | Refresh the browser so the JS extension loads. Also check whether `stream_view` is `off` |
+| Monitor window does not appear | Hard-refresh the browser (`Ctrl+Shift+R`) so the JS extension reloads, then open the console (F12) and look for `[LLM Hub] v… 모니터 확장 로드됨`. **No such line means the JS never loaded** — check the self-check page above. Also check whether `stream_view` is `off`, which hides the panel on purpose |
 | `lms CLI 를 찾을 수 없어` in `debug` | Add LM Studio's `lms` to your PATH or set `cli_paths.lms` in `config.json`. Without it, TTL still handles the unload |
 | `lmstudio_model` dropdown is empty | Start LM Studio, then **refresh the browser** |
 
@@ -355,7 +379,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**227 tests, all passing on Linux. Three fail on Windows.** All three come from
+**251 tests, all passing on Linux. Three fail on Windows.** All three come from
 Linux assumptions, not functional defects — two assert `/` as the path separator when
 passing media to gemini, and one looks for an English string inside a Korean message.
 Treat the Windows baseline as **3**, not 0; anything above that is a regression.
@@ -615,8 +639,9 @@ CLI 3종은 파일을 작업 폴더에 넣고 읽게 하거나(claude/gemini) `-
 |---|---|
 | `plain` (기본) | **이미지 프롬프트 생성용.** 모델이 낸 문자를 있는 그대로 보여줍니다. `**` 같은 기호도 그대로 보이므로 CLIP Text Encode로 넘어갈 실제 문자열을 확인할 수 있습니다 |
 | `markdown` | **문서 요약/분석용.** 제목·불릿·코드블록을 렌더링해 읽기 편합니다 |
-| `off` | 표시하지 않음. 스트리밍 자체를 하지 않아 오버헤드가 없습니다 |
+| `off` | 표시하지 않음. 스트리밍 자체를 하지 않고 **패널도 사라져 노드가 작아집니다** |
 
+- 패널 헤더의 **`복사`** 버튼으로 생성된 텍스트를 클립보드에 담을 수 있습니다. `text` 출력을 어딘가에 연결하지 않아도 결과를 꺼낼 수 있습니다.
 - 모드는 **생성 중에 바꿔도** 즉시 다시 그려집니다.
 - 위로 스크롤하면 자동 스크롤이 멈추고, 맨 아래로 내리면 다시 따라갑니다.
 - 도구를 쓰는 백엔드는 상단에 `도구 사용: Read` 같은 진행 상황이 표시됩니다.
@@ -693,8 +718,25 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
 
 ## 7. 트러블슈팅
 
+### 먼저 여기부터: 자가 진단 페이지
+
+ComfyUI를 켠 상태에서 브라우저로 여세요.
+
+```
+http://127.0.0.1:8188/llmhub/health
+```
+
+노드가 실제로 의존하는 것들을 한 번에 확인해 줍니다 — CLI 4종이 잡히는지, ffmpeg/cv2가 있는지,
+LM Studio가 응답하는지, 프론트엔드 JS가 ComfyUI가 서빙할 위치에 있는지, 그리고 **지금 실제로 도는 버전**.
+
+`[FAIL]`은 필수 항목이 깨진 것이고, `[ -- ]`는 없어도 되는 항목(해당 기능만 못 씁니다)입니다.
+`?json=1`을 붙이면 기계용 JSON으로 나옵니다.
+
+문제를 물어보실 때 이 결과를 통째로 붙여넣으시면 첫 라운드 질문이 대부분 해결됩니다.
+
 | status / 증상 | 원인과 해결 |
 |---|---|
+| `git pull` 했는데 "Already up to date" 라고만 나옴 | 지금 `main`이 아니라 피처 브랜치에 서 있을 가능성이 큽니다. `git pull`은 **서 있는 브랜치만** 당겨옵니다. `git branch --show-current`로 확인하고 `git checkout main` 후 다시 pull 하세요 |
 | `error: LM Studio 서버 응답 없음` | LM Studio가 꺼져 있거나 포트가 다릅니다. 서버 탭에서 실행 여부와 포트를 확인하세요 |
 | `error: claude 로그인 필요` | 터미널에서 `claude`를 한 번 실행해 로그인하세요 |
 | `error: codex 로그인 필요` | `codex login` |
@@ -706,7 +748,7 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
 | `debug`에 `tool loop limit` | LM Studio가 도구 호출만 반복했습니다. `tool_loop_max_iters`를 늘리거나 프롬프트를 더 구체적으로 쓰세요 |
 | `debug`에 `unsupported: temperature` | 정상입니다. CLI 백엔드는 해당 파라미터를 노출하지 않습니다 |
 | 비디오를 넣었는데 `ffmpeg` 안내가 뜸 | ffmpeg을 설치하고 PATH에 추가하세요 (§5) |
-| 모니터링 창이 안 보임 | 브라우저를 새로고침하세요(JS 확장 로드). `stream_view`가 `off`인지도 확인 |
+| 모니터링 창이 안 보임 | 브라우저를 **하드 새로고침**(`Ctrl+Shift+R`)한 뒤 F12 콘솔에 `[LLM Hub] v… 모니터 확장 로드됨` 줄이 있는지 보세요. **그 줄이 없으면 JS가 아예 로드되지 않은 것**이니 위 자가 진단 페이지를 확인하세요. `stream_view`가 `off`면 의도적으로 숨긴 것입니다 |
 | `debug`에 `lms CLI 를 찾을 수 없어` | LM Studio 설치 폴더의 `lms`를 PATH에 넣거나 `config.json`의 `cli_paths.lms`에 절대경로를 지정하세요. 없어도 TTL로는 해제됩니다 |
 | `lmstudio_model` 드롭다운이 비어 있음 | LM Studio를 켠 뒤 **브라우저를 새로고침**하세요 |
 
@@ -746,7 +788,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**227종이며 리눅스에서 전부 통과합니다. Windows 에서는 3종이 실패합니다.** 전부
+**251종이며 리눅스에서 전부 통과합니다. Windows 에서는 3종이 실패합니다.** 전부
 리눅스 가정에서 온 것이고 기능 결함이 아닙니다 — gemini 에 미디어를 넘길 때 경로
 구분자를 `/` 로 기대하는 단정 2건, 한국어 메시지에서 영어 문자열을 찾는 단정
 1건입니다. Windows 기준선은 0이 아니라 **3** 이라고 보고, 그보다 늘어났으면
