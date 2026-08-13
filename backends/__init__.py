@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from .base import BaseBackend, LLMRequest, LLMResponse
 
-BACKEND_NAMES = ["lmstudio", "claude", "codex", "gemini"]
+BACKEND_NAMES = ["lmstudio", "claude", "codex", "gemini", "openai_compat"]
 
 
 def get_backend(name: str) -> BaseBackend:
@@ -24,6 +24,10 @@ def get_backend(name: str) -> BaseBackend:
         from .codex import CodexBackend
 
         return CodexBackend()
+    if key == "openai_compat":
+        from .openai_compat import OpenAICompatBackend
+
+        return OpenAICompatBackend()
     if key == "gemini":
         from .gemini import GeminiBackend
 

@@ -304,7 +304,13 @@ class TestNodeContract(unittest.TestCase):
     def test_input_types_shape(self):
         spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()
         required = spec["required"]
-        self.assertEqual(required["backend"][0], ["lmstudio", "claude", "codex", "gemini"])
+        # 목록을 하드코딩하면 백엔드가 늘 때마다 깨진다. 팩토리와 대조한다.
+        backends_mod = importlib.import_module(f"{_PACK_NAME}.backends")
+        self.assertEqual(required["backend"][0], backends_mod.BACKEND_NAMES)
+        # 기존 넷은 항상 있어야 한다(순서 포함 — 저장된 워크플로우가 인덱스를 쓴다)
+        self.assertEqual(
+            required["backend"][0][:4], ["lmstudio", "claude", "codex", "gemini"]
+        )
         for key in (
             "prompt", "system_prompt", "model", "file_access", "workspace_dir",
             "temperature", "max_tokens", "timeout_sec", "seed",

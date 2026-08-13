@@ -27,7 +27,7 @@ LLMRequest = _backends.LLMRequest
 def main() -> int:
     parser = argparse.ArgumentParser(description="ComfyUI-LLM-Hub 백엔드 스모크 테스트")
     parser.add_argument(
-        "--backend", required=True, choices=["lmstudio", "claude", "codex", "gemini"]
+        "--backend", required=True, choices=list(_backends.BACKEND_NAMES)
     )
     parser.add_argument("--prompt", default="안녕이라고만 답해")
     parser.add_argument("--system", default="")
@@ -42,6 +42,8 @@ def main() -> int:
                         help="비디오 미지원 백엔드에서 뽑을 프레임 수")
     parser.add_argument("--mcp-config", default="")
     parser.add_argument("--extra-args", default="")
+    parser.add_argument("--base-url", default="",
+                        help="openai_compat 서버 주소 (Ollama/vLLM/llama.cpp)")
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--timeout", type=int, default=300)
@@ -66,10 +68,14 @@ def main() -> int:
         max_tokens=args.max_tokens,
         timeout_s=args.timeout,
         extra_args=args.extra_args,
+        base_url_override=args.base_url,
     )
 
     print(f"[{args.backend}] 요청 중... (timeout={args.timeout}s, file_access={req.file_access})")
-    response = get_backend(args.backend).generate(req)
+    impl = get_backend(args.backend)
+    if hasattr(impl, "apply_base_url"):
+        impl.apply_base_url(args.base_url)
+    response = impl.generate(req)
 
     print("=" * 60)
     print("STATUS :", response.status)

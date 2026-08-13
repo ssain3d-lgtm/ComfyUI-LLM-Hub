@@ -36,6 +36,13 @@ DEFAULTS = {
         "unload_after": True,
     },
     # lms 는 LM Studio 의 CLI (즉시 언로드에 사용)
+    # OpenAI 호환 서버 (Ollama / vLLM / llama.cpp 등).
+    # base_url 만 맞추면 LM Studio 와 같은 코드 경로를 탄다.
+    "openai_compat": {
+        "base_url": "http://127.0.0.1:11434",
+        "api_token": "",
+        "default_model": "",
+    },
     "cli_paths": {"claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms"},
     "defaults": {
         # 실측(2026-08-12, gemini-cli 0.55.1): "gemini-3-flash" 는 CLI 가

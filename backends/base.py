@@ -37,6 +37,8 @@ class LLMRequest:
     unload_after: object = None
     timeout_s: int = 300
     extra_args: str = ""
+    # openai_compat 전용: 노드에서 넘긴 서버 주소(비면 config 값을 쓴다)
+    base_url_override: str = ""
     # 실시간 모니터링용 StreamEmitter (없으면 스트리밍하지 않는다)
     emitter: object = None
 
