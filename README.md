@@ -2,6 +2,435 @@
 
 <img src="example_workflows/icon.png" width="96" align="right" alt="">
 
+**English** | [한국어](#한국어)
+
+---
+
+A ComfyUI custom node pack that lets you pick an LLM backend from a dropdown and
+generate text inside your workflow. Run a local model (LM Studio) or the
+subscription CLIs you already pay for (Claude Code / Codex / Gemini) through the
+same node, switching between them without rewiring anything.
+
+- **5 backends**: `lmstudio` / `claude` / `codex` / `gemini` / `openai_compat` (Ollama, vLLM, llama.cpp)
+- **File access**: let the model read files inside a folder you choose
+- **Image and video input**: multimodal prompts
+- **Live monitor on the node**: watch the text as it is generated (plain / markdown)
+- **Automatic VRAM release**: unload the LM Studio model right after the response, or after an idle timeout
+- **Always three outputs**: `text` / `status` / `debug` — the node never kills your workflow with an exception
+
+> **Only `requests` is added to pip.** Everything else uses the standard library or
+> packages ComfyUI already ships.
+
+> **Note on language.** This pack was written for a Korean-speaking author, so the
+> **in-app text is Korean** — widget tooltips, `status` values, and error messages.
+> The English documentation below maps every one of them, and the widget names,
+> config keys and log output are all English. Full localization is not planned for
+> v1; if you want it, open an issue and say so.
+
+## 1. Installation
+
+1. Clone this repository into ComfyUI's `custom_nodes` folder.
+
+   ```
+   cd ComfyUI/custom_nodes
+   git clone https://github.com/ssain3d-lgtm/ComfyUI-LLM-Hub.git
+   ```
+
+   If you downloaded a zip, extract it to `ComfyUI/custom_nodes/ComfyUI-LLM-Hub/`.
+   (`nodes.py`, `backends/` and `utils/` must be directly inside that folder.)
+
+2. Double-click `install.bat`. It finds the Python that ComfyUI uses, installs
+   `requests`, and creates `config.json`.
+
+   Manual install:
+
+   ```
+   <the python ComfyUI uses> -m pip install -r requirements.txt
+   ```
+
+3. Restart ComfyUI and add the **LLM Hub Generate** node (category: `LLM Hub`).
+
+   To update later, run `git pull` inside the node pack folder.
+
+### Dependencies
+
+The only pip dependency is **`requests`**.
+`Pillow` and `numpy` are used for image input but ship with ComfyUI, so they are
+not installed separately. Video frame extraction uses **ffmpeg**, an external
+executable — not a pip package. See §5.
+
+### Example workflows
+
+After installing, open **Workflow → Browse Templates** in the ComfyUI menu to load
+the examples in this pack. (The `example_workflows/` folder is detected automatically.)
+
+| Example | What it does |
+|---|---|
+| `01_image_prompt` | Generate an image prompt — wire `text` into CLIP Text Encode |
+| `02_read_folder` | Read and summarize documents in a folder (`file_access`) |
+| `03_lmstudio_vram` | Local LM Studio model, VRAM released right after the response |
+
+Each example includes a note node describing what you need to prepare.
+Values that differ per machine, such as folder paths, are filled in as examples —
+replace them with your own.
+
+## 2. Per-backend setup
+
+| Backend | Requirements | How to verify |
+|---|---|---|
+| `lmstudio` | LM Studio server running (`http://127.0.0.1:1234`), model loaded | Open `http://127.0.0.1:1234/v1/models` in a browser |
+| `claude` | Claude Code installed + Pro/Max login | Run `claude` in a terminal and check you are logged in |
+| `codex` | Codex CLI installed + ChatGPT login | `codex login` |
+| `gemini` | Gemini CLI installed + Google account login | Run `gemini` and log in |
+| `openai_compat` | An OpenAI-compatible server (Ollama, vLLM, llama.cpp, …) | See §2-1 below |
+
+- To use `file_access`, load a **tool-capable model** in LM Studio (the Qwen family works well).
+- To use images or video, load a **VLM (vision) model** in LM Studio.
+- If a CLI is not on your PATH, put its absolute path in `cli_paths` in `config.json`.
+
+### 2-1. OpenAI-compatible servers (Ollama / vLLM / llama.cpp)
+
+All three expose an OpenAI-compatible `/v1/chat/completions` endpoint. The
+`openai_compat` backend reuses **exactly the same code path as LM Studio** and
+only changes the address.
+
+Put the address in the `openai_base_url` field (leave it empty to use
+`openai_compat.base_url` from `config.json`).
+
+| Server | Address | Start with |
+|---|---|---|
+| Ollama | `http://127.0.0.1:11434` | `ollama serve` |
+| vLLM | `http://127.0.0.1:8000` | `vllm serve <model>` |
+| llama.cpp | `http://127.0.0.1:8080` | `llama-server -m <model>` |
+
+Type the model name into the `model` field above (for example `qwen3:8b`). The
+dropdown is LM Studio only.
+
+**Differences from LM Studio:**
+
+- `ttl` is not sent. It is an LM Studio-specific field and stricter servers may return 400.
+- **There is no automatic VRAM release.** Use `ollama stop <model>`, or shut the vLLM / llama.cpp server down.
+- If your server needs an API key, set `openai_compat.api_token` in `config.json` or the `OPENAI_COMPAT_API_KEY` environment variable. **The LM Studio token is never reused** — sending your token to somebody else's server would be a leak.
+
+> ⚠️ **This backend has not been verified against real hardware.**
+> It reuses the code path verified with LM Studio, but per-server differences
+> (SSE chunk shape, error response format) cannot be confirmed without testing.
+> If you hit a problem, please report it with the `debug` output.
+
+## 3. Node inputs
+
+| Input | Description |
+|---|---|
+| `backend` | Which backend to use |
+| `prompt` | User prompt |
+| `system_prompt` | System prompt |
+| `model` | Leave empty for the backend default |
+| `file_access` | When on, the model can read files inside `workspace_dir` |
+| `workspace_dir` | Working root folder (required when `file_access` is on) |
+| `temperature` / `max_tokens` | **`lmstudio` only.** The three CLIs do not expose these flags, so the values are ignored and noted in `debug` |
+| `timeout_sec` | Default 300 seconds |
+| `video_max_frames` | How many frames to extract when converting video (default 8) |
+| `stream_view` | Monitor display mode: `plain` (default) / `markdown` / `off` |
+| `lmstudio_model` | LM Studio model dropdown. `(auto)` falls back to the `model` field and config |
+| `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
+| `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
+| `openai_base_url` | Address of the OpenAI-compatible server (`openai_compat` only) |
+| `seed` | **The value itself is never used.** It exists so ComfyUI sees "input changed → run again" and skips the cache |
+| `image` *(optional)* | ComfyUI IMAGE |
+| `video` / `video_path` *(optional)* | ComfyUI VIDEO input, or a path to a video file |
+| `mcp_config` *(optional)* | Path to an MCP config JSON (only `claude` actually applies it) |
+| `extra_args` *(optional)* | Raw extra flags for the CLI (advanced). **Flags that unlock the sandbox are blocked automatically** |
+
+> Hover over any input for a tooltip. The `lmstudio_*` widgets are only visible when `backend` is `lmstudio`.
+
+**Collapsing the advanced options.** Most of the inputs above are hidden by default so
+the node stays small. Click the **`▼ 고급`** button on the right of the node's title bar
+to expand them, and **`▲ 고급`** to collapse again. (The same toggle is also in the
+node's right-click menu.) `backend`, `prompt`, `system_prompt` and the model dropdown
+always stay visible. The state is saved with the workflow.
+
+The outputs are `text` (the generated text), `status`, and `debug` (raw response and diagnostics).
+
+`status` has four forms:
+
+| status | Meaning |
+|---|---|
+| `ok` | Completed normally |
+| `error: ...` | Failed, with the reason appended |
+| `rate_limited` | Subscription usage limit hit |
+| `중지됨 — ...` (stopped) | You pressed Stop, or ComfyUI cancelled. **Whatever arrived before the stop is still in `text`** |
+
+Stops and timeouts are deliberately **not** `ok`. Treating a truncated result as a
+success would let downstream nodes consume it as if it were complete. Even when
+`status` is not `ok`, the node returns an empty `text` and the reason instead of
+raising.
+
+## 4. File access
+
+Turn on `file_access` and set `workspace_dir`; that folder becomes the working root.
+
+- **claude / codex / gemini**: the CLI is launched with that folder as its `cwd` and uses its own built-in read tools.
+- **lmstudio**: the node itself provides two function tools, `list_dir` and `read_file`, and drives the tool-call loop.
+
+Everything is read-only:
+
+| Backend | How |
+|---|---|
+| claude | `--allowedTools "Read,Glob,Grep"` (no Write/Edit/Bash) |
+| codex | `-s read-only` sandbox |
+| gemini | `--approval-mode plan` (read-only mode) |
+| lmstudio | The tools the node provides are read-only |
+
+When `file_access` is off, the CLI backends run in a **fresh empty temporary folder**
+each time, so your file system is not visible to them.
+
+> ### Security note: workspace files are untrusted input
+> If a file contains something like "ignore all previous instructions and …", the
+> model may follow it (prompt injection).
+> **Point `workspace_dir` at the narrowest folder that works.** The node blocks paths
+> that escape the folder (`../`) and symlinks pointing outside it, but it does not
+> inspect the *contents* of files inside the folder.
+
+## 5. Image and video input
+
+### Images
+
+All five backends support images. `lmstudio` and `openai_compat` send a base64
+data URI; the CLIs either place the file in the working folder and let the model
+read it (claude / gemini) or pass it with `-i` (codex).
+
+### Video — handled differently per backend
+
+| Backend | Native video | What actually happens |
+|---|---|---|
+| **gemini** | **Yes** | The video file is passed through. No frame extraction |
+| claude | No | **Frames are extracted and sent as images** |
+| codex | No | **Frames are extracted and sent as images** |
+| lmstudio | No | **Frames are extracted and sent as images** |
+
+Gemini is the only one that accepts video natively. The others see **a handful of
+still frames sampled at even intervals**, not the whole clip, so fast motion and
+anything that depends on audio will be missed. Control the frame count with
+`video_max_frames`.
+
+**Frame extraction needs ffmpeg.**
+
+- [Download ffmpeg](https://ffmpeg.org/download.html) and add it to your PATH.
+- If `opencv-python` (`cv2`) already exists in your ComfyUI environment, it is used automatically as a fallback.
+- With neither available, `debug` explains how to install one and only text generation proceeds.
+
+Use either `video` (ComfyUI VIDEO input) or `video_path` (a path string). If both
+are set, `video_path` wins.
+
+## 5-2. Live monitor window
+
+The node shows the text as it is being generated. Pick the mode with `stream_view`.
+
+| Value | When to use it |
+|---|---|
+| `plain` (default) | **For image prompts.** Shows exactly the characters the model produced, symbols like `**` included, so you can see the literal string that will reach CLIP Text Encode |
+| `markdown` | **For document summaries and analysis.** Renders headings, bullets and code blocks so it is easier to read |
+| `off` | No display. Streaming is skipped entirely, and **the panel itself is removed** so the node shrinks |
+
+- The **`복사`** (copy) button in the panel header copies the generated text to the clipboard, so you can use it without wiring the `text` output anywhere.
+- You can **switch modes mid-generation**; it redraws immediately.
+- Scrolling up pauses auto-scroll; scrolling back to the bottom resumes it.
+- Backends that use tools show progress such as `도구 사용: Read` at the top.
+- The monitor contents are not saved into the workflow file.
+
+How each backend streams (all measured, not assumed):
+
+| Backend | Method |
+|---|---|
+| claude | `--output-format stream-json --include-partial-messages --verbose` → token level |
+| gemini | `-o stream-json` → `message` events (role=assistant, delta) |
+| codex | `--json` JSONL |
+| lmstudio | SSE (`stream: true`) → token level |
+
+> LM Studio does not stream when `file_access=True`. Assembling tool calls from
+> fragments is unreliable, so for correctness only tool progress is displayed.
+
+## 5-3. LM Studio model selection and VRAM
+
+ComfyUI needs VRAM for image models, so an LM Studio model holding onto it is a problem.
+
+**Model selection** — pick from the `lmstudio_model` dropdown.
+If LM Studio is not running you will only see `(auto)`. **Start LM Studio, then refresh
+your browser** to populate the list. With `(auto)`, the model is chosen from the
+`model` field → `default_model` in `config.json` → whatever the server has loaded.
+
+**VRAM release** — two mechanisms work together.
+
+1. `lmstudio_unload_after` (on by default) — runs `lms unload <model>` right after the
+   response for an **immediate** release. LM Studio's `lms` CLI must be on your PATH;
+   if it is missing this is skipped and the reason is written to `debug` (generation
+   still succeeds).
+2. `lmstudio_ttl_sec` (default 300) — sends a `ttl` with the request so LM Studio unloads
+   the model itself after that many seconds without a request. This is the safety net for
+   when `lms` is unavailable. `0` means don't send it (LM Studio's own 60-minute default applies).
+
+If you call the node repeatedly and reloading each time is too slow, turn
+`lmstudio_unload_after` off and rely on `lmstudio_ttl_sec` alone.
+
+## 6. Configuration file (`config.json`)
+
+Created automatically on first run by copying `config.example.json`. (`config.json` is
+never committed to git.)
+
+```json
+{
+  "lmstudio": {
+    "base_url": "http://127.0.0.1:1234",
+    "api_token": "",
+    "default_model": "",
+    "ttl_sec": 300,
+    "unload_after": true
+  },
+  "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
+  "defaults": {
+    "gemini_model": "gemini-3-flash",
+    "gemini_approval_mode": "plan",
+    "claude_system_prompt_mode": "append"
+  },
+  "tool_loop_max_iters": 8,
+  "max_file_read_bytes": 262144
+}
+```
+
+- `gemini_model`: Pro models burn through the subscription quota quickly, so the default is Flash.
+- `gemini_approval_mode`: `plan` is the read-only mode. If responses come back shaped like a "plan document", try `default`.
+- `claude_system_prompt_mode`:
+  - `append` (default) — appends to Claude Code's own system prompt. Tool-use ability is preserved.
+  - `replace` — replaces the built-in prompt entirely. Use it **when you need style or language instructions to stick.**
+    In `append` mode the built-in prompt is strong enough to dilute instructions like "answer in English only" — measured, not guessed.
+- `lmstudio.ttl_sec` / `lmstudio.unload_after`: these become the **widget defaults** on the node. Per-run widget values take priority.
+- `cli_paths.lms`: path to the LM Studio CLI, used for immediate VRAM release.
+- `allow_unsafe_extra_args` (default `false`): whether `extra_args` may contain flags that unlock the read-only sandbox (`--dangerously-*`, `--allowedTools Bash`, `-s danger-full-access`, `--yolo`, …). **Blocked by default.** Only set it to `true` if you genuinely need it.
+- Secrets such as `api_token` are never included in `debug` output.
+
+## 7. Troubleshooting
+
+### Start here: the self-check page
+
+With ComfyUI running, open this in a browser:
+
+```
+http://127.0.0.1:8188/llmhub/health
+```
+
+It prints a plain-text report of everything the node actually depends on — whether
+each CLI resolves, whether ffmpeg or cv2 is available, whether LM Studio answers,
+whether the frontend JS is where ComfyUI will serve it from, and the version that is
+really running. `[FAIL]` marks a required item; `[ -- ]` is optional and only disables
+that one feature. Add `?json=1` for machine-readable output.
+
+Paste this report into any bug report — it answers most of the first round of questions.
+
+| status / symptom | Cause and fix |
+|---|---|
+| `git pull` says "Already up to date" but nothing changed | You are probably standing on a feature branch, not `main`. `git pull` only updates the branch you are on. Check with `git branch --show-current`, then `git checkout main` and pull again |
+| `error: LM Studio 서버 응답 없음` | LM Studio is not running, or the port differs. Check the Server tab |
+| `error: claude 로그인 필요` | Run `claude` once in a terminal and log in |
+| `error: codex 로그인 필요` | `codex login` |
+| `error: gemini 로그인 필요` | Run `gemini` and log in with your Google account |
+| `error: '...' 실행 파일을 찾을 수 없습니다` | The CLI is not on your PATH. Put the absolute path in `cli_paths` in `config.json` |
+| `rate_limited` | Subscription limit reached. Claude is 5-hour/weekly, Gemini is daily, Codex is plan credits. For Gemini, switching to a Flash model helps |
+| `error: workspace_dir 확인 필요` | `file_access` is on but the folder is empty or does not exist |
+| `error: timeout(...)` | Increase `timeout_sec`. The CLIs need 2–10 s for a cold start |
+| `tool loop limit` in `debug` | LM Studio only kept calling tools. Raise `tool_loop_max_iters` or make the prompt more specific |
+| `unsupported: temperature` in `debug` | Expected. The CLI backends do not expose that parameter |
+| ffmpeg notice after adding a video | Install ffmpeg and add it to your PATH (§5) |
+| Monitor window does not appear | Hard-refresh the browser (`Ctrl+Shift+R`) so the JS extension reloads, then open the console (F12) and look for `[LLM Hub] v… 모니터 확장 로드됨`. **No such line means the JS never loaded** — check the self-check page above. Also check whether `stream_view` is `off`, which hides the panel on purpose |
+| `lms CLI 를 찾을 수 없어` in `debug` | Add LM Studio's `lms` to your PATH or set `cli_paths.lms` in `config.json`. Without it, TTL still handles the unload |
+| `lmstudio_model` dropdown is empty | Start LM Studio, then **refresh the browser** |
+
+### Speed
+
+The CLI backends need a 2–10 s cold start plus a full agent loop, so a single call takes
+seconds to tens of seconds. **For workflows that call the node many times, use the
+`lmstudio` backend.** The three CLIs suit batch-style prompt generation better.
+
+### Cost — the three CLIs bill your subscription on every call
+
+`lmstudio` is local and free. The other three **charge your account every time the node
+runs.** Measured on 2026-08-12 with the same short prompt:
+
+| `claude_model` | Actual model | Cost per call |
+|---|---|---|
+| `haiku` | claude-haiku-4-5 | $0.014 |
+| `opus` | claude-opus-5 | $0.047 |
+| `sonnet` | claude-sonnet-5 | $0.102 |
+| `fable` | claude-fable-5 | $0.196 |
+
+**Every call is a new session, so the CLI's own system prompt (about 9,000 tokens) is
+billed again each time** — even for a one-word "hi". Setting
+`claude_system_prompt_mode` to `replace` in `config.json` drops input tokens from
+9,218 to 5,782, saving roughly 36% of the cost, but **speed barely changes**
+(4.59 s → 4.43 s). The bottleneck is the ~2 s CLI startup plus the round trip, not
+the prompt size.
+
+Check this before running a batch: 100 prompts costs $1.4 even on haiku, and $19.6 on fable.
+
+## 8. Tests
+
+Offline verification, no logins or servers required:
+
+```
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+**255 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
+Windows on 3.12.
+
+Earlier versions of this file claimed three tests failed on Windows. When CI actually
+ran there, the count was **two**, and both were assertions expecting `/` as the path
+separator — the product was right (it hands a Windows program Windows separators), the
+test was Linux-naive. Both are fixed. The baseline is now **0 on both platforms**.
+
+Five tests skip when `ffmpeg` is absent; that is expected, not a failure.
+
+Smoke tests against real backends (requires a logged-in environment):
+
+```
+python tests/test_backends.py --backend claude --prompt "안녕이라고만 답해"
+python tests/test_backends.py --backend lmstudio --workspace tests/fixtures --file-access --prompt "test.txt 를 요약해"
+python tests/test_backends.py --backend gemini --image tests/fixtures/sample.png --prompt "이 그림 설명해"
+python tests/test_backends.py --backend claude --video tests/fixtures/sample_video.mp4 --prompt "이 영상 설명해"
+```
+
+## 9. Not included in v1
+
+Multi-turn session persistence (`--resume`), file write/edit tools, web search tools,
+full exposure of every backend-specific parameter, an auto-installer.
+
+MCP support varies by backend:
+
+- **claude**: give `mcp_config` a JSON path and it is passed through with `--mcp-config` (works)
+- **codex**: MCP tool approval is auto-cancelled in non-interactive mode, so v1 does not support it. The workaround flags unlock the sandbox, so they are not used
+- **gemini**: requires editing the global `settings.json`, which has broad side effects. Not applied in v1
+- **lmstudio**: the official API-MCP is planned for v1.5. For now the node's built-in tool loop is used
+
+Setting it anyway never kills the node — the reason is written to `debug`.
+
+## License and trademarks
+
+MIT. See [LICENSE](LICENSE).
+
+This is an unofficial, independent project. It is not affiliated with, endorsed by,
+or sponsored by Anthropic, OpenAI, Google, LM Studio, or Comfy Org. "Claude",
+"Codex", "Gemini", "LM Studio", "Ollama" and "ComfyUI" are the trademarks of their
+respective owners and are used here only to identify the tools this node pack can
+talk to. You need your own account and subscription for each backend you use, and
+your use of them is governed by that vendor's own terms.
+
+---
+
+<a id="한국어"></a>
+
+# 한국어
+
+[English](#comfyui-llm-hub) | **한국어**
 
 ComfyUI에서 LLM 백엔드를 드롭다운으로 골라 텍스트를 생성하는 커스텀 노드팩입니다.
 로컬 모델(LM Studio)과 이미 쓰고 있는 구독 CLI(Claude Code / Codex / Gemini)를
@@ -130,6 +559,12 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 
 > 각 입력 위에 마우스를 올리면 한국어 설명(툴팁)이 나옵니다. `lmstudio_*` 위젯은 backend가 `lmstudio`일 때만 보입니다.
 
+**고급 옵션 접기/펴기.** 위 입력 대부분은 기본적으로 숨겨져 있어 노드가 작게 유지됩니다.
+노드 **제목 줄 오른쪽의 `▼ 고급` 버튼**을 누르면 펼쳐지고, `▲ 고급`을 누르면 다시 접힙니다.
+(노드 우클릭 메뉴에도 같은 항목이 있습니다.)
+`backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다.
+펼침 상태는 워크플로우에 함께 저장됩니다.
+
 출력은 `text`(생성된 텍스트) / `status` / `debug`(원시 응답·진단)입니다.
 
 `status` 값은 네 가지입니다.
@@ -175,8 +610,8 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 
 ### 이미지
 
-4개 백엔드 모두 지원합니다. lmstudio는 base64 data URI로, CLI 3종은 파일을 작업 폴더에 넣고
-읽게 하거나(claude/gemini) `-i` 플래그로 넘깁니다(codex).
+5개 백엔드 모두 지원합니다. lmstudio·openai_compat 는 base64 data URI로,
+CLI 3종은 파일을 작업 폴더에 넣고 읽게 하거나(claude/gemini) `-i` 플래그로 넘깁니다(codex).
 
 ### 비디오 — 백엔드별로 처리 방식이 다릅니다
 
@@ -210,8 +645,9 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 |---|---|
 | `plain` (기본) | **이미지 프롬프트 생성용.** 모델이 낸 문자를 있는 그대로 보여줍니다. `**` 같은 기호도 그대로 보이므로 CLIP Text Encode로 넘어갈 실제 문자열을 확인할 수 있습니다 |
 | `markdown` | **문서 요약/분석용.** 제목·불릿·코드블록을 렌더링해 읽기 편합니다 |
-| `off` | 표시하지 않음. 스트리밍 자체를 하지 않아 오버헤드가 없습니다 |
+| `off` | 표시하지 않음. 스트리밍 자체를 하지 않고 **패널도 사라져 노드가 작아집니다** |
 
+- 패널 헤더의 **`복사`** 버튼으로 생성된 텍스트를 클립보드에 담을 수 있습니다. `text` 출력을 어딘가에 연결하지 않아도 결과를 꺼낼 수 있습니다.
 - 모드는 **생성 중에 바꿔도** 즉시 다시 그려집니다.
 - 위로 스크롤하면 자동 스크롤이 멈추고, 맨 아래로 내리면 다시 따라갑니다.
 - 도구를 쓰는 백엔드는 상단에 `도구 사용: Read` 같은 진행 상황이 표시됩니다.
@@ -264,7 +700,7 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
   },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
-    "gemini_model": "gemini-2.5-flash",
+    "gemini_model": "gemini-3-flash",
     "gemini_approval_mode": "plan",
     "claude_system_prompt_mode": "append"
   },
@@ -288,8 +724,25 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
 
 ## 7. 트러블슈팅
 
+### 먼저 여기부터: 자가 진단 페이지
+
+ComfyUI를 켠 상태에서 브라우저로 여세요.
+
+```
+http://127.0.0.1:8188/llmhub/health
+```
+
+노드가 실제로 의존하는 것들을 한 번에 확인해 줍니다 — CLI 4종이 잡히는지, ffmpeg/cv2가 있는지,
+LM Studio가 응답하는지, 프론트엔드 JS가 ComfyUI가 서빙할 위치에 있는지, 그리고 **지금 실제로 도는 버전**.
+
+`[FAIL]`은 필수 항목이 깨진 것이고, `[ -- ]`는 없어도 되는 항목(해당 기능만 못 씁니다)입니다.
+`?json=1`을 붙이면 기계용 JSON으로 나옵니다.
+
+문제를 물어보실 때 이 결과를 통째로 붙여넣으시면 첫 라운드 질문이 대부분 해결됩니다.
+
 | status / 증상 | 원인과 해결 |
 |---|---|
+| `git pull` 했는데 "Already up to date" 라고만 나옴 | 지금 `main`이 아니라 피처 브랜치에 서 있을 가능성이 큽니다. `git pull`은 **서 있는 브랜치만** 당겨옵니다. `git branch --show-current`로 확인하고 `git checkout main` 후 다시 pull 하세요 |
 | `error: LM Studio 서버 응답 없음` | LM Studio가 꺼져 있거나 포트가 다릅니다. 서버 탭에서 실행 여부와 포트를 확인하세요 |
 | `error: claude 로그인 필요` | 터미널에서 `claude`를 한 번 실행해 로그인하세요 |
 | `error: codex 로그인 필요` | `codex login` |
@@ -301,7 +754,7 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
 | `debug`에 `tool loop limit` | LM Studio가 도구 호출만 반복했습니다. `tool_loop_max_iters`를 늘리거나 프롬프트를 더 구체적으로 쓰세요 |
 | `debug`에 `unsupported: temperature` | 정상입니다. CLI 백엔드는 해당 파라미터를 노출하지 않습니다 |
 | 비디오를 넣었는데 `ffmpeg` 안내가 뜸 | ffmpeg을 설치하고 PATH에 추가하세요 (§5) |
-| 모니터링 창이 안 보임 | 브라우저를 새로고침하세요(JS 확장 로드). `stream_view`가 `off`인지도 확인 |
+| 모니터링 창이 안 보임 | 브라우저를 **하드 새로고침**(`Ctrl+Shift+R`)한 뒤 F12 콘솔에 `[LLM Hub] v… 모니터 확장 로드됨` 줄이 있는지 보세요. **그 줄이 없으면 JS가 아예 로드되지 않은 것**이니 위 자가 진단 페이지를 확인하세요. `stream_view`가 `off`면 의도적으로 숨긴 것입니다 |
 | `debug`에 `lms CLI 를 찾을 수 없어` | LM Studio 설치 폴더의 `lms`를 PATH에 넣거나 `config.json`의 `cli_paths.lms`에 절대경로를 지정하세요. 없어도 TTL로는 해제됩니다 |
 | `lmstudio_model` 드롭다운이 비어 있음 | LM Studio를 켠 뒤 **브라우저를 새로고침**하세요 |
 
@@ -341,10 +794,16 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**190종이며, Windows 에서는 3종이 실패합니다.** 전부 리눅스 가정에서 온 것이고
-기능 결함이 아닙니다 — gemini 에 미디어를 넘길 때 경로 구분자를 `/` 로 기대하는
-단정 2건, 한국어 메시지에서 영어 문자열을 찾는 단정 1건입니다. 기준선은 0이 아니라
-**3** 이라고 보고, 그보다 늘어났으면 회귀입니다.
+**255종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
+Windows 는 3.12.
+
+이전 판에는 "Windows 에서 3종 실패" 라고 적혀 있었습니다. **CI 를 실제로 돌려보니
+2종이었고**, 둘 다 경로 구분자를 `/` 로 기대하는 단정이었습니다 — 네이티브
+프로그램에 네이티브 구분자를 넘기는 제품 동작이 옳고 테스트가 리눅스 가정이었던
+것입니다. 둘 다 고쳤습니다. **이제 기준선은 양쪽 다 0** 입니다.
+
+`ffmpeg` 이 없으면 5종이 skip 됩니다. 이건 실패가 아니라 정상입니다.
 
 실제 백엔드 스모크 테스트(로그인된 환경 필요):
 
@@ -359,7 +818,7 @@ python tests/test_backends.py --backend claude --video tests/fixtures/sample_vid
 
 ## 9. v1에서 하지 않는 것
 
-스트리밍 출력, 멀티턴 세션 유지(`--resume`), 파일 쓰기/편집 도구, 웹검색 도구,
+멀티턴 세션 유지(`--resume`), 파일 쓰기/편집 도구, 웹검색 도구,
 백엔드별 고급 파라미터 전체 노출, 자동 설치기.
 
 MCP는 백엔드마다 상황이 다릅니다:
@@ -370,3 +829,15 @@ MCP는 백엔드마다 상황이 다릅니다:
 - **lmstudio**: 공식 API-MCP는 v1.5 예정. 지금은 노드 내장 도구 루프를 씁니다
 
 지정해도 노드가 죽지 않고 `debug`에 사유를 남깁니다.
+
+---
+
+## 라이선스와 상표
+
+MIT 입니다. [LICENSE](LICENSE) 를 보세요.
+
+이것은 비공식 개인 프로젝트입니다. Anthropic, OpenAI, Google, LM Studio, Comfy Org
+어느 곳과도 제휴·후원·승인 관계가 없습니다. "Claude", "Codex", "Gemini",
+"LM Studio", "Ollama", "ComfyUI" 는 각 소유자의 상표이며, 이 노드팩이 어떤 도구와
+통신할 수 있는지를 나타내기 위해서만 쓰였습니다. 각 백엔드는 **본인 계정과 구독**이
+있어야 쓸 수 있고, 그 사용은 해당 업체의 이용약관을 따릅니다.

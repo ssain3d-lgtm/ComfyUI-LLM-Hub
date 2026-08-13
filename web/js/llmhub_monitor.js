@@ -9,6 +9,11 @@ import { api } from "../../scripts/api.js";
 const NODE_NAME = "LLMHubGenerate";
 const EVENT_NAME = "llmhub.stream";
 
+// version.py 와 같은 값이어야 한다(테스트로 고정). 진단할 때 제일 먼저 묻는 게
+// "브라우저가 지금 몇 버전 JS 를 들고 있느냐" 인데, 캐시된 옛 파일이 남아 있으면
+// 파이썬만 새 버전이고 화면은 옛날인 상태가 된다. 그때 이 줄이 답을 준다.
+const VERSION = "1.1.0";
+
 // 패널은 노드 객체에 직접 붙인다.
 // onNodeCreated 시점에는 node.id 가 아직 -1 이라(그래프 추가 시 배정됨)
 // id 를 키로 Map 에 넣어두면 이벤트의 실제 id 와 영원히 매칭되지 않는다.
@@ -132,8 +137,43 @@ function renderMarkdown(source) {
 }
 
 // --------------------------------------------------------------------------
+// 클립보드
+// --------------------------------------------------------------------------
+// navigator.clipboard 는 "보안 컨텍스트" 에서만 존재한다. localhost 는 예외라
+// 있지만, ComfyUI 를 http://192.168.x.x:8188 처럼 LAN 주소로 열면 아예 없다.
+// 그래서 구식 execCommand 폴백을 남겨둔다.
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (error) {
+    // 권한 거부 등 — 아래 폴백으로 내려간다
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    // 화면 밖으로 밀면 iOS 가 스크롤을 튕긴다. 제자리에 두고 투명하게 만든다.
+    area.style.position = "fixed";
+    area.style.top = "0";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    return ok;
+  } catch (error) {
+    return false;
+  }
+}
+
+// --------------------------------------------------------------------------
 // 패널 생성
 // --------------------------------------------------------------------------
+
+// 모니터 창 높이. stream_view=off 로 숨길 때 되돌릴 값이라 모듈 범위에 둔다.
+const PANEL_HEIGHT = 240;
 
 function createPanel(node) {
   const root = document.createElement("div");
@@ -142,6 +182,7 @@ function createPanel(node) {
     <div class="llmhub-head">
       <span class="llmhub-status">대기 중</span>
       <span class="llmhub-meta"></span>
+      <button class="llmhub-copy" type="button" title="생성된 텍스트를 클립보드에 복사합니다">복사</button>
       <button class="llmhub-stop" type="button" title="이 노드의 생성을 중지합니다">■ Stop</button>
     </div>
     <div class="llmhub-body"></div>
@@ -151,11 +192,28 @@ function createPanel(node) {
   const metaEl = root.querySelector(".llmhub-meta");
   const bodyEl = root.querySelector(".llmhub-body");
   const stopEl = root.querySelector(".llmhub-stop");
+  const copyEl = root.querySelector(".llmhub-copy");
 
   // 캔버스가 이 클릭을 노드 드래그로 삼키지 않게 한다.
   for (const name of ["pointerdown", "mousedown", "click"]) {
     stopEl.addEventListener(name, (event) => event.stopPropagation());
+    copyEl.addEventListener(name, (event) => event.stopPropagation());
   }
+
+  let copyTimer = null;
+  copyEl.addEventListener("click", async () => {
+    const text = control.lastText || "";
+    // 빈 값을 쓰면 클립보드에 들어 있던 것이 조용히 지워진다.
+    let label;
+    if (!text) label = "내용 없음";
+    else label = (await copyToClipboard(text)) ? "복사됨" : "복사 실패";
+
+    copyEl.textContent = label;
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => {
+      copyEl.textContent = "복사";
+    }, 1200);
+  });
   stopEl.addEventListener("click", async () => {
     stopEl.disabled = true;
     stopEl.textContent = "중지 중...";
@@ -199,6 +257,9 @@ function createPanel(node) {
     },
     setStatus(status, elapsed, done) {
       statusEl.textContent = status || (done ? "완료" : "생성 중...");
+      // 한 줄로 잘리므로, 잘린 내용은 마우스를 올려 볼 수 있게 남긴다.
+      // (도구 사용 줄은 파일 경로가 길어서 거의 항상 잘린다.)
+      statusEl.title = statusEl.textContent;
       statusEl.classList.toggle("llmhub-running", !done);
       metaEl.textContent = elapsed != null ? `${elapsed}s` : "";
       // 돌고 있을 때만 보인다. 멈출 것이 없을 때 눌러봐야 아무 일도 안 일어나는
@@ -236,7 +297,6 @@ function createPanel(node) {
   // 위젯도 `computeLayoutSize = () => ({minHeight, minWidth})` 를 쓴다). computeSize
   // 만 주면 무시돼서 패널이 엉뚱한 높이로 잡히고 위 위젯을 덮는다.
   // 옛 프론트엔드는 computeSize 를 보므로 둘 다 둔다.
-  const PANEL_HEIGHT = 240;
   widget.computeSize = (width) => [width, PANEL_HEIGHT];
   widget.computeLayoutSize = () => ({ minHeight: PANEL_HEIGHT, minWidth: 200 });
 
@@ -256,6 +316,30 @@ function createPanel(node) {
 function viewMode(node) {
   const widget = node.widgets?.find((w) => w.name === "stream_view");
   return widget ? widget.value : "plain";
+}
+
+// stream_view 를 off 로 두면 스트리밍 자체를 하지 않는다. 그런데 지금까지는
+// 빈 패널이 240px 를 그대로 차지하고 있었다 -- 끄는 이유가 보통 "노드를 작게
+// 쓰려고" 인데 정작 제일 큰 것이 안 없어지니 앞뒤가 안 맞는다.
+//
+// DOM 위젯이라 숨기는 방법이 위젯들과 다르다. 어느 프론트엔드가 무엇을 보는지
+// 확인할 수 없어 셋 다 건다: 실제 요소, 그리고 두 가지 크기 계산 API.
+function applyMonitorVisibility(node, mode) {
+  const widget = node[PANEL_KEY]?.widget;
+  if (!widget) return;
+
+  // mode 를 넘기는 쪽은 위젯 callback 이다. 위젯이 값을 먼저 쓰고 callback 을
+  // 부르는 게 관용이지만, 그 순서에 기대지 않으려고 값을 직접 받는다.
+  const hidden = (mode ?? viewMode(node)) === "off";
+  if (widget.element) widget.element.style.display = hidden ? "none" : "";
+  widget.hidden = hidden;
+  if (hidden) {
+    widget.computeSize = () => [0, -4];
+    widget.computeLayoutSize = () => ({ minHeight: 0, minWidth: 0 });
+  } else {
+    widget.computeSize = (width) => [width, PANEL_HEIGHT];
+    widget.computeLayoutSize = () => ({ minHeight: PANEL_HEIGHT, minWidth: 200 });
+  }
 }
 
 // backend 값에 따라 그 백엔드가 실제로 쓰는 위젯만 보인다.
@@ -366,6 +450,7 @@ function setupBackendToggle(node) {
       }
     }
 
+    applyMonitorVisibility(node);
     resizeToWidgets(node);
     node.setDirtyCanvas?.(true, true);
   };
@@ -383,6 +468,69 @@ function setupBackendToggle(node) {
   apply();
 }
 
+function toggleAdvanced(node) {
+  node.properties[SHOW_ADVANCED_PROP] = !node.properties?.[SHOW_ADVANCED_PROP];
+  node._llmhubApplyBackendToggle?.();
+}
+
+// --------------------------------------------------------------------------
+// 고급 옵션 버튼 (타이틀 바 오른쪽)
+// --------------------------------------------------------------------------
+// 우클릭 메뉴는 있는 줄도 모른다. 그래서 눈에 보이는 버튼을 하나 그린다.
+//
+// addWidget 으로 만들지 않는 이유: 위젯은 widgets_values 배열에 자리를 차지한다.
+// 중간에 하나 끼면 이 노드로 저장해둔 예전 워크플로우의 값이 전부 한 칸씩 밀린다.
+// 캔버스에 직접 그리면 저장 데이터를 아예 건드리지 않는다.
+//
+// 우클릭 메뉴는 그대로 남겨둔다. 프론트엔드 버전에 따라 onMouseDown 이 안 불릴
+// 가능성이 있는데, 그때 조작 수단이 통째로 사라지면 안 되기 때문이다.
+const BUTTON = { width: 58, height: 18, margin: 8 };
+const HOVER_KEY = "_llmhubBtnHover";
+
+function buttonRect(node) {
+  const titleHeight = window.LiteGraph?.NODE_TITLE_HEIGHT ?? 30;
+  return {
+    x: (node.size?.[0] ?? 0) - BUTTON.width - BUTTON.margin,
+    // 타이틀 바는 노드 본문 기준 음수 y 영역이다(본문 위쪽).
+    y: -titleHeight + (titleHeight - BUTTON.height) / 2,
+    w: BUTTON.width,
+    h: BUTTON.height,
+  };
+}
+
+function insideButton(node, pos) {
+  if (node.flags?.collapsed) return false;
+  const r = buttonRect(node);
+  return (
+    pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.y && pos[1] <= r.y + r.h
+  );
+}
+
+function drawAdvancedButton(node, ctx) {
+  if (node.flags?.collapsed) return;
+  const shown = !!node.properties?.[SHOW_ADVANCED_PROP];
+  const hover = !!node[HOVER_KEY];
+  const r = buttonRect(node);
+
+  ctx.save();
+  ctx.beginPath();
+  // roundRect 는 비교적 최근 API 라 없을 수 있다. 없으면 각진 사각형으로 떨어진다.
+  if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, 4);
+  else ctx.rect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = hover ? "#4b5563" : shown ? "#3b4351" : "#2c3038";
+  ctx.fill();
+  ctx.strokeStyle = hover ? "#8ab4f8" : "#5a6270";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = "#e8e8e8";
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(shown ? "▲ 고급" : "▼ 고급", r.x + r.w / 2, r.y + r.h / 2);
+  ctx.restore();
+}
+
 // --------------------------------------------------------------------------
 // 등록
 // --------------------------------------------------------------------------
@@ -391,6 +539,12 @@ app.registerExtension({
   name: "ComfyUI-LLM-Hub.Monitor",
 
   async setup() {
+    // 이 줄이 F12 콘솔에 없으면 JS 가 아예 로드되지 않은 것이다.
+    // (WEB_DIRECTORY 경로 문제로 실제로 겪었다 — 그때는 아무 흔적도 없었다.)
+    console.log(
+      `[LLM Hub] v${VERSION} 모니터 확장 로드됨. 진단: /llmhub/health`
+    );
+
     api.addEventListener(EVENT_NAME, (event) => {
       const data = event.detail || {};
       const [node, control] = panelFor(data.node);
@@ -446,8 +600,13 @@ app.registerExtension({
       const widget = this.widgets?.find((w) => w.name === "stream_view");
       if (widget) {
         const previous = widget.callback;
+        const node = this;
         widget.callback = function (value) {
           control.render(control.lastText, value);
+          // off 로 바꾸면 패널이 사라지고 노드도 그만큼 줄어야 한다.
+          applyMonitorVisibility(node, value);
+          resizeToWidgets(node);
+          node.setDirtyCanvas?.(true, true);
           return previous?.apply(this, arguments);
         };
       }
@@ -459,18 +618,56 @@ app.registerExtension({
       return result;
     };
 
-    // 위젯을 하나 더 만들지 않고 우클릭 메뉴로 접고 편다.
-    // 위젯을 추가하면 widgets_values 자리를 차지해 예전 워크플로우와 어긋난다.
+    // 타이틀 바에 버튼을 그린다.
+    const onDrawForeground = nodeType.prototype.onDrawForeground;
+    nodeType.prototype.onDrawForeground = function (ctx) {
+      const result = onDrawForeground?.apply(this, arguments);
+      drawAdvancedButton(this, ctx);
+      return result;
+    };
+
+    // true 를 돌려주면 LiteGraph 가 노드 끌기를 시작하지 않는다.
+    // 이게 없으면 버튼을 누를 때마다 노드가 딸려 움직인다.
+    const onMouseDown = nodeType.prototype.onMouseDown;
+    nodeType.prototype.onMouseDown = function (event, pos) {
+      if (insideButton(this, pos)) {
+        toggleAdvanced(this);
+        return true;
+      }
+      return onMouseDown?.apply(this, arguments);
+    };
+
+    // 마우스를 올리면 색이 바뀐다 — 이게 있어야 "눌리는 것" 으로 보인다.
+    const onMouseMove = nodeType.prototype.onMouseMove;
+    nodeType.prototype.onMouseMove = function (event, pos) {
+      const hover = insideButton(this, pos);
+      if (hover !== !!this[HOVER_KEY]) {
+        this[HOVER_KEY] = hover;
+        this.setDirtyCanvas?.(true, false);
+      }
+      return onMouseMove?.apply(this, arguments);
+    };
+
+    // 노드 밖으로 나가면 onMouseMove 가 더 안 불린다. 여기서 안 꺼주면
+    // 강조된 채로 굳는다.
+    const onMouseLeave = nodeType.prototype.onMouseLeave;
+    nodeType.prototype.onMouseLeave = function () {
+      if (this[HOVER_KEY]) {
+        this[HOVER_KEY] = false;
+        this.setDirtyCanvas?.(true, false);
+      }
+      return onMouseLeave?.apply(this, arguments);
+    };
+
+    // 우클릭 메뉴도 남겨둔다. 프론트엔드 버전에 따라 onMouseDown 이 안 불릴
+    // 수 있는데, 그때 조작 수단이 통째로 사라지면 안 된다.
     const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
     nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
       const result = getExtraMenuOptions?.apply(this, arguments);
       const shown = !!this.properties?.[SHOW_ADVANCED_PROP];
       options.push({
         content: shown ? "고급 옵션 접기" : "고급 옵션 펼치기",
-        callback: () => {
-          this.properties[SHOW_ADVANCED_PROP] = !shown;
-          this._llmhubApplyBackendToggle?.();
-        },
+        callback: () => toggleAdvanced(this),
       });
       return result;
     };
@@ -496,8 +693,15 @@ app.registerExtension({
 
 const style = document.createElement("style");
 style.textContent = `
-.llmhub-stop {
-  margin-left: auto;
+/* 복사와 Stop 을 오른쪽 끝에 한 덩어리로 붙인다. Stop 은 생성 중에만 보이므로
+   margin-left:auto 를 Stop 에 걸면 버튼 줄이 상태에 따라 좌우로 튄다. */
+.llmhub-copy { margin-left: auto; }
+.llmhub-copy, .llmhub-stop {
+  /* flex 기본값은 줄어들 수 있음(shrink:1) 이라, 상태 문구가 길어지면
+     버튼 폭이 글자 하나 너비까지 눌려서 "복/사" 처럼 세로로 접힌다.
+     도구 이름이 긴 실행에서 실제로 그렇게 됐다. */
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 1px 8px;
   font-size: 11px;
   line-height: 16px;
@@ -509,6 +713,7 @@ style.textContent = `
 }
 .llmhub-stop:hover:not(:disabled) { border-color: #c04040; color: #ff8080; }
 .llmhub-stop:disabled { opacity: 0.5; cursor: default; }
+.llmhub-copy:hover { border-color: #4a90d9; color: #8ab4f8; }
 
 /* 사고 과정은 답이 아니다 — 흐리고 기울여서 최종 결과와 한눈에 구분되게 한다. */
 .llmhub-body.llmhub-thinking {
@@ -534,6 +739,16 @@ style.textContent = `
   color: var(--descrip-text, #999);
   flex: 0 0 auto;
 }
+/* 상태 문구만 줄어든다. 길면 말줄임하고 전체 내용은 마우스를 올리면 보인다.
+   여기서 줄바꿈을 허용하면 생성 중에 헤더 높이가 들쭉날쭉해서 눈에 거슬린다.
+   min-width:0 이 없으면 flex 항목이 내용보다 작아지지 않아 말줄임이 안 걸린다. */
+.llmhub-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.llmhub-meta { flex: 0 0 auto; }
 .llmhub-status.llmhub-running::before {
   content: "●"; margin-right: 5px; color: #4caf50;
   animation: llmhub-blink 1s steps(2, start) infinite;
