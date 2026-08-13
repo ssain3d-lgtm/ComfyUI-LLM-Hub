@@ -295,6 +295,40 @@ const ADVANCED = [
 
 const SHOW_ADVANCED_PROP = "showAdvanced";
 
+// 위젯을 숨기거나 되살린 뒤 노드 높이를 그만큼 조정한다.
+//
+// setDirtyCanvas 는 다시 그리기만 한다. node.size 는 저장된 값이라 위젯이
+// 사라져도 저절로 줄지 않는다 -- 그래서 고급 옵션을 펼쳤다 접으면 칸이 펼친
+// 크기 그대로 남는다.
+//
+// node.setSize(node.computeSize()) 로 끝내지 않는 이유: 그러면 사용자가 손으로
+// 늘려둔 높이(모니터 창을 크게 쓰는 경우)까지 매번 최소 크기로 깎아버린다.
+// 대신 "최소 높이가 얼마나 변했는지"만 재서 그 차이만큼 더하고 뺀다.
+const LAST_MIN_KEY = "_llmhubLastMin";
+
+function resizeToWidgets(node) {
+  let min;
+  try {
+    min = node.computeSize?.()?.[1];
+  } catch (e) {
+    return;
+  }
+  if (typeof min !== "number" || !isFinite(min)) return;
+
+  const previous = node[LAST_MIN_KEY];
+  node[LAST_MIN_KEY] = min;
+
+  // 첫 호출과 워크플로우 로드 직후에는 조정하지 않는다.
+  // 저장된 크기는 이미 그때 상태에 맞는 값이라 여기서 또 빼면 너무 작아진다.
+  if (previous === undefined) return;
+
+  const delta = min - previous;
+  if (delta === 0) return;
+
+  const height = Math.max((node.size?.[1] ?? min) + delta, min);
+  node.setSize?.([node.size?.[0] ?? node.computeSize()[0], height]);
+}
+
 function setupBackendToggle(node) {
   const backendWidget = node.widgets?.find((w) => w.name === "backend");
   if (!backendWidget) return;
@@ -330,6 +364,8 @@ function setupBackendToggle(node) {
         w.computeSize = () => [0, -4];
       }
     }
+
+    resizeToWidgets(node);
     node.setDirtyCanvas?.(true, true);
   };
 
