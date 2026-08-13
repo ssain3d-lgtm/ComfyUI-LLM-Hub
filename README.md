@@ -137,6 +137,12 @@ dropdown is LM Studio only.
 
 > Hover over any input for a tooltip. The `lmstudio_*` widgets are only visible when `backend` is `lmstudio`.
 
+**Collapsing the advanced options.** Most of the inputs above are hidden by default so
+the node stays small. Click the **`▼ 고급`** button on the right of the node's title bar
+to expand them, and **`▲ 고급`** to collapse again. (The same toggle is also in the
+node's right-click menu.) `backend`, `prompt`, `system_prompt` and the model dropdown
+always stay visible. The state is saved with the workflow.
+
 The outputs are `text` (the generated text), `status`, and `debug` (raw response and diagnostics).
 
 `status` has four forms:
@@ -522,6 +528,12 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 | `extra_args` *(옵션)* | CLI에 덧붙일 원시 플래그(고급). **샌드박스를 푸는 위험 플래그는 자동 차단** |
 
 > 각 입력 위에 마우스를 올리면 한국어 설명(툴팁)이 나옵니다. `lmstudio_*` 위젯은 backend가 `lmstudio`일 때만 보입니다.
+
+**고급 옵션 접기/펴기.** 위 입력 대부분은 기본적으로 숨겨져 있어 노드가 작게 유지됩니다.
+노드 **제목 줄 오른쪽의 `▼ 고급` 버튼**을 누르면 펼쳐지고, `▲ 고급`을 누르면 다시 접힙니다.
+(노드 우클릭 메뉴에도 같은 항목이 있습니다.)
+`backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다.
+펼침 상태는 워크플로우에 함께 저장됩니다.
 
 출력은 `text`(생성된 텍스트) / `status` / `debug`(원시 응답·진단)입니다.
 

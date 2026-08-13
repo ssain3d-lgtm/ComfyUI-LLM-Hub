@@ -383,6 +383,69 @@ function setupBackendToggle(node) {
   apply();
 }
 
+function toggleAdvanced(node) {
+  node.properties[SHOW_ADVANCED_PROP] = !node.properties?.[SHOW_ADVANCED_PROP];
+  node._llmhubApplyBackendToggle?.();
+}
+
+// --------------------------------------------------------------------------
+// 고급 옵션 버튼 (타이틀 바 오른쪽)
+// --------------------------------------------------------------------------
+// 우클릭 메뉴는 있는 줄도 모른다. 그래서 눈에 보이는 버튼을 하나 그린다.
+//
+// addWidget 으로 만들지 않는 이유: 위젯은 widgets_values 배열에 자리를 차지한다.
+// 중간에 하나 끼면 이 노드로 저장해둔 예전 워크플로우의 값이 전부 한 칸씩 밀린다.
+// 캔버스에 직접 그리면 저장 데이터를 아예 건드리지 않는다.
+//
+// 우클릭 메뉴는 그대로 남겨둔다. 프론트엔드 버전에 따라 onMouseDown 이 안 불릴
+// 가능성이 있는데, 그때 조작 수단이 통째로 사라지면 안 되기 때문이다.
+const BUTTON = { width: 58, height: 18, margin: 8 };
+const HOVER_KEY = "_llmhubBtnHover";
+
+function buttonRect(node) {
+  const titleHeight = window.LiteGraph?.NODE_TITLE_HEIGHT ?? 30;
+  return {
+    x: (node.size?.[0] ?? 0) - BUTTON.width - BUTTON.margin,
+    // 타이틀 바는 노드 본문 기준 음수 y 영역이다(본문 위쪽).
+    y: -titleHeight + (titleHeight - BUTTON.height) / 2,
+    w: BUTTON.width,
+    h: BUTTON.height,
+  };
+}
+
+function insideButton(node, pos) {
+  if (node.flags?.collapsed) return false;
+  const r = buttonRect(node);
+  return (
+    pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.y && pos[1] <= r.y + r.h
+  );
+}
+
+function drawAdvancedButton(node, ctx) {
+  if (node.flags?.collapsed) return;
+  const shown = !!node.properties?.[SHOW_ADVANCED_PROP];
+  const hover = !!node[HOVER_KEY];
+  const r = buttonRect(node);
+
+  ctx.save();
+  ctx.beginPath();
+  // roundRect 는 비교적 최근 API 라 없을 수 있다. 없으면 각진 사각형으로 떨어진다.
+  if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, 4);
+  else ctx.rect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = hover ? "#4b5563" : shown ? "#3b4351" : "#2c3038";
+  ctx.fill();
+  ctx.strokeStyle = hover ? "#8ab4f8" : "#5a6270";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = "#e8e8e8";
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(shown ? "▲ 고급" : "▼ 고급", r.x + r.w / 2, r.y + r.h / 2);
+  ctx.restore();
+}
+
 // --------------------------------------------------------------------------
 // 등록
 // --------------------------------------------------------------------------
@@ -459,18 +522,56 @@ app.registerExtension({
       return result;
     };
 
-    // 위젯을 하나 더 만들지 않고 우클릭 메뉴로 접고 편다.
-    // 위젯을 추가하면 widgets_values 자리를 차지해 예전 워크플로우와 어긋난다.
+    // 타이틀 바에 버튼을 그린다.
+    const onDrawForeground = nodeType.prototype.onDrawForeground;
+    nodeType.prototype.onDrawForeground = function (ctx) {
+      const result = onDrawForeground?.apply(this, arguments);
+      drawAdvancedButton(this, ctx);
+      return result;
+    };
+
+    // true 를 돌려주면 LiteGraph 가 노드 끌기를 시작하지 않는다.
+    // 이게 없으면 버튼을 누를 때마다 노드가 딸려 움직인다.
+    const onMouseDown = nodeType.prototype.onMouseDown;
+    nodeType.prototype.onMouseDown = function (event, pos) {
+      if (insideButton(this, pos)) {
+        toggleAdvanced(this);
+        return true;
+      }
+      return onMouseDown?.apply(this, arguments);
+    };
+
+    // 마우스를 올리면 색이 바뀐다 — 이게 있어야 "눌리는 것" 으로 보인다.
+    const onMouseMove = nodeType.prototype.onMouseMove;
+    nodeType.prototype.onMouseMove = function (event, pos) {
+      const hover = insideButton(this, pos);
+      if (hover !== !!this[HOVER_KEY]) {
+        this[HOVER_KEY] = hover;
+        this.setDirtyCanvas?.(true, false);
+      }
+      return onMouseMove?.apply(this, arguments);
+    };
+
+    // 노드 밖으로 나가면 onMouseMove 가 더 안 불린다. 여기서 안 꺼주면
+    // 강조된 채로 굳는다.
+    const onMouseLeave = nodeType.prototype.onMouseLeave;
+    nodeType.prototype.onMouseLeave = function () {
+      if (this[HOVER_KEY]) {
+        this[HOVER_KEY] = false;
+        this.setDirtyCanvas?.(true, false);
+      }
+      return onMouseLeave?.apply(this, arguments);
+    };
+
+    // 우클릭 메뉴도 남겨둔다. 프론트엔드 버전에 따라 onMouseDown 이 안 불릴
+    // 수 있는데, 그때 조작 수단이 통째로 사라지면 안 된다.
     const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
     nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
       const result = getExtraMenuOptions?.apply(this, arguments);
       const shown = !!this.properties?.[SHOW_ADVANCED_PROP];
       options.push({
         content: shown ? "고급 옵션 접기" : "고급 옵션 펼치기",
-        callback: () => {
-          this.properties[SHOW_ADVANCED_PROP] = !shown;
-          this._llmhubApplyBackendToggle?.();
-        },
+        callback: () => toggleAdvanced(this),
       });
       return result;
     };

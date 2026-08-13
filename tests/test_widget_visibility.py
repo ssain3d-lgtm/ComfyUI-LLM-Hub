@@ -137,5 +137,58 @@ class TestWidgetVisibility(unittest.TestCase):
         self.assertIn("_llmhubApplyBackendToggle", after)
 
 
+class TestAdvancedButton(unittest.TestCase):
+    """고급 옵션 접기/펴기 버튼 (타이틀 바에 직접 그린다)."""
+
+    def setUp(self):
+        self.javascript = _javascript()
+        # 주석을 걷어낸 코드. "addWidget 을 쓰지 않는다" 는 주석이 그 검사에
+        # 스스로 걸리는 것을 막는다(예전 shell=True 검사에서 겪은 그 함정).
+        self.code = "\n".join(
+            line.split("//", 1)[0] for line in self.javascript.splitlines()
+        )
+
+    def test_button_is_not_a_widget(self):
+        """addWidget 으로 만들면 widgets_values 자리를 차지한다.
+
+        중간에 한 칸이 끼면 이 노드로 저장해둔 예전 워크플로우의 값이 전부
+        밀린다. 그래서 캔버스에 직접 그린다.
+        """
+        self.assertNotIn("addWidget", self.code)
+        self.assertIn("onDrawForeground", self.code)
+
+    def test_click_blocks_node_drag(self):
+        """onMouseDown 이 true 를 안 돌려주면 버튼을 누를 때 노드가 딸려 움직인다."""
+        body = self.javascript.split("nodeType.prototype.onMouseDown = function", 1)[1]
+        body = body.split("\n    };", 1)[0]
+        self.assertIn("insideButton", body)
+        self.assertIn("return true", body)
+
+    def test_right_click_menu_survives_as_a_fallback(self):
+        """프론트엔드 버전에 따라 onMouseDown 이 안 불릴 수 있다.
+
+        그때 조작 수단이 통째로 사라지면 고급 옵션을 영영 못 연다.
+        """
+        self.assertIn("getExtraMenuOptions", self.javascript)
+        self.assertIn("고급 옵션 접기", self.javascript)
+
+    def test_both_paths_share_one_toggle(self):
+        """버튼과 메뉴가 각자 상태를 뒤집으면 한쪽이 어긋난다."""
+        self.assertEqual(self.javascript.count("function toggleAdvanced"), 1)
+        self.assertEqual(self.javascript.count("toggleAdvanced(this)"), 2)
+
+    def test_hover_is_cleared_on_leave(self):
+        """노드 밖으로 나가면 onMouseMove 가 안 불린다. 안 꺼주면 강조된 채 굳는다."""
+        self.assertIn("onMouseLeave", self.javascript)
+        after = self.javascript.split("nodeType.prototype.onMouseLeave", 1)[1]
+        self.assertIn("= false", after.split("\n    };", 1)[0])
+
+    def test_button_hides_when_the_node_is_collapsed(self):
+        """접힌 노드는 본문이 없다. 계속 그리면 타이틀 위에 유령이 남는다."""
+        for func in ("function drawAdvancedButton", "function insideButton"):
+            body = self.javascript.split(func, 1)[1].split("\n}", 1)[0]
+            self.assertIn("flags?.collapsed", body, f"{func}: 접힘 검사가 없다")
+
+
 if __name__ == "__main__":
     unittest.main()
