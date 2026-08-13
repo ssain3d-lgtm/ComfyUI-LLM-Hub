@@ -191,7 +191,7 @@ class TestLmStudioStops(unittest.TestCase):
         self.assertLess(elapsed, 20, f"중지가 안 먹었다 ({elapsed:.1f}s)")
         self.assertTrue(response.text, "받은 데까지는 돌려줘야 한다")
         self.assertNotEqual(response.status, "ok", "중지를 성공으로 위장하면 안 된다")
-        self.assertIn("중지", response.status)
+        self.assertIn("stopped", response.status)
 
 
 class TestNonStreamingLimit(unittest.TestCase):
@@ -216,7 +216,7 @@ class TestNonStreamingLimit(unittest.TestCase):
             cancel.request_stop("9")
             with mock.patch.object(cancel, "is_stopped", lambda _n: True):
                 response = backend.generate(req)
-        self.assertIn("중지", response.status)
+        self.assertIn("stopped", response.status)
 
 
 class TestRouteAndButton(unittest.TestCase):

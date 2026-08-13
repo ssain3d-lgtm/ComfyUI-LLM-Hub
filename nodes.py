@@ -246,7 +246,7 @@ class LLMHubGenerate:
                         image, workspace_dir, bool(file_access)
                     )
                 except Exception as exc:
-                    media_notes.append(f"image: PNG 저장 실패 — {type(exc).__name__}: {exc}")
+                    media_notes.append(f"image: failed to save PNG - {type(exc).__name__}: {exc}")
 
             if video is not None or (video_path or "").strip():
                 tmp_dir = image_io.get_tmp_dir(workspace_dir, bool(file_access))
@@ -259,7 +259,7 @@ class LLMHubGenerate:
             emitter = stream.make_emitter(
                 node_id=unique_id, enabled=(stream_view != "off")
             )
-            emitter.set_status(f"{backend} 준비 중...")
+            emitter.set_status(f"{backend} starting...")
 
             # 백엔드별 드롭다운에서 고른 모델이 있으면 그쪽이 우선한다.
             # 드롭다운은 그 백엔드에서만 본다 — claude 를 쓰는데 lmstudio_model 이
@@ -301,13 +301,13 @@ class LLMHubGenerate:
             # "종료 코드 -1" 등). 사용자가 누른 것은 오류가 아니므로 여기 한 곳에서
             # 통일해 말해준다. 받은 데까지는 그대로 둔다.
             if cancel.is_stopped(unique_id):
-                response.status = "중지됨 — 사용자가 멈춰 받은 부분까지만 반환"
+                response.status = "stopped - cancelled by user, returning what arrived so far"
 
             emitter.finish(status=response.status, text=response.text or emitter.text)
 
             debug_parts = list(media_notes)
             if image_paths:
-                debug_parts.append(f"images: {len(image_paths)}개 저장 → {image_paths[0]}")
+                debug_parts.append(f"images: {len(image_paths)} saved -> {image_paths[0]}")
             if video_paths:
                 debug_parts.append(f"video: {video_paths[0]}")
             debug_parts.append(f"backend={backend} duration={response.duration_s:.1f}s")
@@ -330,7 +330,7 @@ class LLMHubGenerate:
                     emitter.finish(status=f"error: {type(exc).__name__}")
                 except Exception:
                     pass
-            status_out = f"error: 노드 내부 오류 — {type(exc).__name__}: {exc}"
+            status_out = f"error: internal node error - {type(exc).__name__}: {exc}"
             return {
                 "ui": {"text": [""], "llmhub_status": [status_out]},
                 "result": ("", status_out, truncate_debug(traceback.format_exc())),

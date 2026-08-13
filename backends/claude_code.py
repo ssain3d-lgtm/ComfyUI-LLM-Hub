@@ -40,7 +40,7 @@ from .base import (
 # file_access=True 일 때만 허용하는 읽기 전용 툴 (DESIGN §11).
 READ_ONLY_TOOLS = "Read,Glob,Grep"
 
-LOGIN_HINT = "error: claude 로그인 필요 — 터미널에서 claude 실행 후 로그인"
+LOGIN_HINT = "error: claude login required - run claude in a terminal and sign in"
 
 
 class ClaudeCodeBackend(BaseBackend):
@@ -121,9 +121,9 @@ class ClaudeCodeBackend(BaseBackend):
                 if os.path.exists(req.mcp_config):
                     args += ["--mcp-config", req.mcp_config, "--strict-mcp-config"]
                     allowed = (allowed + "," if allowed else "") + "mcp__*"
-                    notes.append(f"claude: mcp-config 적용 → {req.mcp_config}")
+                    notes.append(f"claude: applied mcp-config -> {req.mcp_config}")
                 else:
-                    notes.append(f"claude: mcp_config 파일이 없어 무시 → {req.mcp_config}")
+                    notes.append(f"claude: mcp_config file not found, ignored -> {req.mcp_config}")
 
             if allowed:
                 args += ["--allowedTools", allowed]
@@ -135,9 +135,9 @@ class ClaudeCodeBackend(BaseBackend):
             safe_extra, rejected = screen_extra_args(parse_extra_args(req.extra_args))
             if rejected:
                 notes.append(
-                    "extra_args: 샌드박스를 푸는 위험 플래그를 차단했습니다 → "
+                    "extra_args: blocked flags that would unlock the sandbox -> "
                     + " ".join(rejected)
-                    + " (필요하면 config.json 의 allow_unsafe_extra_args=true)"
+                    + " (set allow_unsafe_extra_args=true in config.json if you really need them)"
                 )
             args += safe_extra
 
@@ -210,7 +210,7 @@ class ClaudeCodeBackend(BaseBackend):
             response.text = partial
             if response.status.startswith("error:"):
                 response.raw_debug = truncate_debug(
-                    response.raw_debug + "\n(스트리밍 중단 — 받은 부분까지만 반환)"
+                    response.raw_debug + "\n(stream interrupted - returning what arrived so far)"
                 )
         return response
 
@@ -219,7 +219,7 @@ class ClaudeCodeBackend(BaseBackend):
 
         if code == -1:  # run_cli 가 표시한 타임아웃
             return LLMResponse(
-                status=f"error: timeout — claude 응답이 제한 시간 안에 오지 않음",
+                status=f"error: timeout - claude did not respond within the time limit",
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
@@ -239,7 +239,7 @@ class ClaudeCodeBackend(BaseBackend):
                 status="rate_limited",
                 duration_s=duration,
                 raw_debug=truncate_debug(
-                    debug + "\nclaude 사용량 한도에 걸렸습니다. 한도 리셋을 기다리세요.\n" + tail_lines(stderr)
+                    debug + "\nclaude usage limit reached. Wait for the limit to reset.\n" + tail_lines(stderr)
                 ),
             )
 
@@ -248,16 +248,16 @@ class ClaudeCodeBackend(BaseBackend):
         if payload is None:
             if code != 0:
                 return LLMResponse(
-                    status=f"error: claude 종료 코드 {code}",
+                    status=f"error: claude exit code {code}",
                     duration_s=duration,
                     raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
                 )
             text = (stdout or "").strip()
             return LLMResponse(
                 text=text,
-                status="ok" if text else "error: claude 응답이 비어 있음",
+                status="ok" if text else "error: the claude response was empty",
                 duration_s=duration,
-                raw_debug=truncate_debug(debug + "\n(JSON 파싱 실패, stdout 원문 사용)\n" + tail_lines(stderr)),
+                raw_debug=truncate_debug(debug + "\n(could not parse JSON; using raw stdout)\n" + tail_lines(stderr)),
             )
 
         result = payload.get("result")
@@ -277,7 +277,7 @@ class ClaudeCodeBackend(BaseBackend):
 
         return LLMResponse(
             text=result.strip(),
-            status="ok" if result.strip() else "error: claude 응답이 비어 있음",
+            status="ok" if result.strip() else "error: the claude response was empty",
             duration_s=duration,
             raw_debug=truncate_debug(debug),
         )
@@ -313,7 +313,7 @@ def _on_stream_line(line: str, emitter) -> None:
         return
 
     if kind == "system" and event.get("subtype") == "init":
-        emitter.set_status("모델 준비 중...")
+        emitter.set_status("loading model...")
 
 
 def _build_prompt(req: LLMRequest, staged: list) -> str:
@@ -321,7 +321,7 @@ def _build_prompt(req: LLMRequest, staged: list) -> str:
     prefix = ""
     if staged:
         names = ", ".join(staged)
-        prefix = f"먼저 Read 툴로 {names} 파일을 확인한 뒤 작업하라.\n\n"
+        prefix = f"First use the Read tool on {names}, then continue.\n\n"
     return prefix + (req.user_prompt or "")
 
 

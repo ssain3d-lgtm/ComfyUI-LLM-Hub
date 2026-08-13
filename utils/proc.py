@@ -44,8 +44,8 @@ def resolve_cli(name: str) -> str:
             return found
 
     raise CliNotFoundError(
-        f"'{name}' 실행 파일을 찾을 수 없습니다. "
-        f"PATH 에 추가하거나 config.json 의 cli_paths.{name} 에 절대경로를 지정하세요."
+        f"'{name}' executable not found. Add it to PATH, or set an absolute path "
+        f"in config.json under cli_paths.{name}."
     )
 
 

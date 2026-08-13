@@ -177,7 +177,7 @@ class TestClaudeBackend(unittest.TestCase):
                 LLMRequest("claude", "", "", "hi", mcp_config="/no/such/file.json")
             )
         self.assertNotIn("--mcp-config", fake.args)
-        self.assertIn("파일이 없어 무시", resp.raw_debug)
+        self.assertIn("file not found, ignored", resp.raw_debug)
 
     def test_image_enables_read_and_is_staged(self):
         png = os.path.join(FIXTURES, "sample.png")
@@ -202,7 +202,7 @@ class TestClaudeBackend(unittest.TestCase):
         fake = FakeCli(code=1, stderr="Please log in to continue")
         with _patch(claude_mod, fake):
             resp = claude_mod.ClaudeCodeBackend().generate(LLMRequest("claude", "", "", "hi"))
-        self.assertIn("로그인 필요", resp.status)
+        self.assertIn("login required", resp.status)
 
     def test_rate_limit_detection(self):
         fake = FakeCli(code=1, stderr="You have reached your usage limit")
@@ -238,7 +238,7 @@ class TestClaudeBackend(unittest.TestCase):
         resp = claude_mod.ClaudeCodeBackend().generate(
             LLMRequest("claude", "", "", "hi", file_access=True)
         )
-        self.assertIn("workspace_dir 확인 필요", resp.status)
+        self.assertIn("workspace_dir needed", resp.status)
 
 
 GEMINI_OK = json.dumps({"session_id": "abc", "response": "안녕", "stats": {"turns": 1}})
@@ -303,7 +303,7 @@ class TestGeminiBackend(unittest.TestCase):
         fake = FakeCli(code=1, stdout=payload)
         with _patch(gemini_mod, fake):
             resp = self._backend().generate(LLMRequest("gemini", "", "", "hi"))
-        self.assertIn("로그인 필요", resp.status)
+        self.assertIn("login required", resp.status)
 
     def test_quota_error_maps_to_rate_limited(self):
         payload = json.dumps(
@@ -327,7 +327,7 @@ class TestGeminiBackend(unittest.TestCase):
             resp = self._backend().generate(
                 LLMRequest("gemini", "", "", "hi", mcp_config="x.json")
             )
-        self.assertIn("v1 미적용", resp.raw_debug)
+        self.assertIn("not applied in v1", resp.raw_debug)
 
 
 class TestCodexBackend(unittest.TestCase):
@@ -396,13 +396,13 @@ class TestCodexBackend(unittest.TestCase):
             resp = codex_mod.CodexBackend().generate(
                 LLMRequest("codex", "", "", "hi", mcp_config="x.json")
             )
-        self.assertIn("v1 미지원", resp.raw_debug)
+        self.assertIn("not supported in v1", resp.raw_debug)
 
     def test_login_error_detection(self):
         fake = FakeCli(code=1, stderr="Please sign in with codex login", write_last_message="")
         with _patch(codex_mod, fake):
             resp = codex_mod.CodexBackend().generate(LLMRequest("codex", "", "", "hi"))
-        self.assertIn("로그인 필요", resp.status)
+        self.assertIn("login required", resp.status)
 
     def test_timeout_status(self):
         fake = FakeCli(code=-1, stderr="error: timeout(1s)", write_last_message="")

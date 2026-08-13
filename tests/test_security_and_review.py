@@ -45,7 +45,7 @@ class TestExtraArgsSandbox(unittest.TestCase):
             )
         self.assertNotIn("--dangerously-skip-permissions", fake.args)
         self.assertNotIn("Bash", " ".join(fake.args))
-        self.assertIn("차단", resp.raw_debug)
+        self.assertIn("blocked flags", resp.raw_debug)
 
     def test_codex_sandbox_flag_blocked(self):
         fake = FakeCli(write_last_message="x")
@@ -119,7 +119,7 @@ class TestErrorMisclassification(unittest.TestCase):
             resp = claude_mod.ClaudeCodeBackend(config={}).generate(
                 LLMRequest("claude", "", "", "hi")
             )
-        self.assertIn("로그인 필요", resp.status)
+        self.assertIn("login required", resp.status)
 
     def test_codex_answer_mentioning_rate_limit(self):
         fake = FakeCli(code=0, write_last_message="rate limit 은 요청 한도입니다.")

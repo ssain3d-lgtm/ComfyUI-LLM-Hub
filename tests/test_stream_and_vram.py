@@ -282,7 +282,7 @@ class TestLMStudioVram(unittest.TestCase):
         self.assertTrue(calls, "lms unload 가 호출되지 않았다")
         self.assertEqual(calls[0][1], "unload")
         self.assertEqual(calls[0][2], "mock-model-a")  # 응답이 알려준 실제 모델
-        self.assertIn("VRAM 에서 내렸습니다", resp.raw_debug)
+        self.assertIn("unloaded from VRAM", resp.raw_debug)
 
     def test_no_unload_when_disabled(self):
         calls = []

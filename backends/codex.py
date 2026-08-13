@@ -40,7 +40,7 @@ from .base import (
     validate_workspace,
 )
 
-LOGIN_HINT = "error: codex 로그인 필요 — 터미널에서 codex login 실행 후 다시 시도하세요"
+LOGIN_HINT = "error: codex login required - run codex login in a terminal, then try again"
 
 
 class CodexBackend(BaseBackend):
@@ -90,15 +90,15 @@ class CodexBackend(BaseBackend):
             args += ["-o", last_message_path]
 
             if req.mcp_config:
-                notes.append("codex: 비대화형 MCP 승인 이슈로 v1 미지원")
+                notes.append("codex: not supported in v1 - MCP tool approval is auto-cancelled in non-interactive mode")
 
             node_id = getattr(req.emitter, "node_id", None)
             safe_extra, rejected = screen_extra_args(parse_extra_args(req.extra_args))
             if rejected:
                 notes.append(
-                    "extra_args: 샌드박스를 푸는 위험 플래그를 차단했습니다 → "
+                    "extra_args: blocked flags that would unlock the sandbox -> "
                     + " ".join(rejected)
-                    + " (필요하면 config.json 의 allow_unsafe_extra_args=true)"
+                    + " (set allow_unsafe_extra_args=true in config.json if you really need them)"
                 )
             args += safe_extra
 
@@ -147,7 +147,7 @@ class CodexBackend(BaseBackend):
 
         if code == -1:
             return LLMResponse(
-                status="error: timeout — codex 응답이 제한 시간 안에 오지 않음",
+                status="error: timeout - codex did not respond within the time limit",
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
@@ -166,7 +166,7 @@ class CodexBackend(BaseBackend):
                 status="rate_limited",
                 duration_s=duration,
                 raw_debug=truncate_debug(
-                    debug + "\ncodex 플랜 크레딧/한도에 걸렸습니다.\n" + tail_lines(stderr)
+                    debug + "\ncodex plan credits / usage limit reached.\n" + tail_lines(stderr)
                 ),
             )
 
@@ -175,18 +175,18 @@ class CodexBackend(BaseBackend):
         if not text:
             text = (stdout or "").strip()
             if text:
-                debug += "\n(-o 파일이 비어 stdout 을 사용)"
+                debug += "\n(the -o file was empty; using stdout)"
 
         if code != 0 and not text:
             return LLMResponse(
-                status=f"error: codex 종료 코드 {code}",
+                status=f"error: codex exit code {code}",
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
 
         if not text:
             return LLMResponse(
-                status="error: codex 응답이 비어 있음",
+                status="error: the codex response was empty",
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )

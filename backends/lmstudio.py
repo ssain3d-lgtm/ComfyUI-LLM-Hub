@@ -28,7 +28,7 @@ from .base import (
     workspace_hint,
 )
 
-CONNECT_ERROR_MSG = "error: LM Studio 서버 응답 없음 (127.0.0.1:1234 실행/포트 확인)"
+CONNECT_ERROR_MSG = "error: no response from the LM Studio server (check it is running and on port 1234)"
 
 
 class LMStudioBackend(BaseBackend):
@@ -150,23 +150,23 @@ class LMStudioBackend(BaseBackend):
         from ..utils.proc import CliNotFoundError, resolve_cli, run_cli
 
         if not model_id:
-            return "unload: 대상 모델을 알 수 없어 건너뜀 (TTL 만료 시 자동 해제됨)"
+            return "unload: skipped, the target model is unknown (TTL will release it)"
 
         try:
             exe = resolve_cli("lms")
         except CliNotFoundError:
             return (
-                "unload: lms CLI 를 찾을 수 없어 즉시 언로드를 건너뜀. "
-                "LM Studio 설치 폴더의 lms 를 PATH 에 추가하거나 config.json 의 "
-                "cli_paths.lms 에 절대경로를 넣으세요. (TTL 만료 시에는 자동 해제됩니다)"
+                "unload: the lms CLI was not found, so immediate unload is skipped. "
+                "Add LM Studio's lms to PATH, or set an absolute path in config.json "
+                "under cli_paths.lms. (TTL still releases the model.)"
             )
 
         code, _stdout, stderr, _dur = run_cli(
             [exe, "unload", model_id], cwd=None, stdin_text=None, timeout_s=60
         )
         if code == 0:
-            return f"unload: '{model_id}' 를 VRAM 에서 내렸습니다"
-        return f"unload: 실패(exit {code}) — {tail_lines(stderr, 3)}"
+            return f"unload: '{model_id}' unloaded from VRAM"
+        return f"unload: failed (exit {code}) — {tail_lines(stderr, 3)}"
 
     def _generate(self, req: LLMRequest) -> LLMResponse:
         started = time.time()
@@ -178,15 +178,15 @@ class LMStudioBackend(BaseBackend):
             return LLMResponse(status=ws_error, duration_s=time.time() - started)
 
         if req.mcp_config:
-            debug_notes.append("lmstudio: mcp_config는 v1.5 예정, 내장 툴 루프 사용")
+            debug_notes.append("lmstudio: mcp_config is planned for v1.5; using the built-in tool loop")
         if req.extra_args:
-            debug_notes.append("lmstudio: extra_args 는 HTTP 백엔드에서 무시됨")
+            debug_notes.append("lmstudio: extra_args is ignored by this HTTP backend")
 
         try:
             import requests  # noqa: F401
         except ImportError:
             return LLMResponse(
-                status="error: requests 패키지가 없습니다 (install.bat 실행 또는 pip install requests)",
+                status="error: the requests package is missing (run install.bat, or pip install requests)",
                 duration_s=time.time() - started,
                 raw_debug="\n".join(debug_notes),
             )
@@ -218,7 +218,7 @@ class LMStudioBackend(BaseBackend):
 
         return LLMResponse(
             text=(text or "").strip(),
-            status="ok" if (text or "").strip() else "error: 빈 응답 (모델이 텍스트를 내지 않음)",
+            status="ok" if (text or "").strip() else "error: empty response (the model produced no text)",
             duration_s=duration,
             raw_debug=truncate_debug("\n".join(debug_notes)),
         )
@@ -264,12 +264,12 @@ class LMStudioBackend(BaseBackend):
                 # 여기서 끊어야 Stop 이 즉시 듣는다. 받은 데까지는 그대로 돌려주고,
                 # 성공으로 위장하지 않는 판정은 호출부가 한다.
                 resp.close()
-                req.emitter.set_status("중지됨 — 받은 부분까지만 사용")
+                req.emitter.set_status("stopped - using what arrived so far")
                 break
             if time.time() > deadline:
                 resp.close()
                 timed_out = True
-                req.emitter.set_status(f"timeout({req.timeout_s}s) — 받은 부분까지만 사용")
+                req.emitter.set_status(f"timeout({req.timeout_s}s) - using what arrived so far")
                 break
             if not raw:
                 continue
@@ -321,8 +321,8 @@ class LMStudioBackend(BaseBackend):
                 return (
                     LLMResponse(
                         text=(last_text or "").strip(),
-                        status="중지됨 — 사용자가 멈춰 받은 부분까지만 반환",
-                        raw_debug="lmstudio: 사용자 중지 (반복 경계)",
+                        status="stopped - cancelled by user, returning what arrived so far",
+                        raw_debug="lmstudio: cancelled by user (between tool-loop rounds)",
                     ),
                     notes,
                 )
@@ -337,8 +337,8 @@ class LMStudioBackend(BaseBackend):
                         return (
                             LLMResponse(
                                 text=streamed.strip(),
-                                status="중지됨 — 사용자가 멈춰 받은 부분까지만 반환",
-                                raw_debug="lmstudio: 사용자 중지",
+                                status="stopped - cancelled by user, returning what arrived so far",
+                                raw_debug="lmstudio: cancelled by user",
                             ),
                             notes,
                         )
@@ -347,8 +347,8 @@ class LMStudioBackend(BaseBackend):
                         return (
                             LLMResponse(
                                 text=streamed.strip(),
-                                status=f"error: timeout({req.timeout_s}s) — 받은 부분까지만 반환",
-                                raw_debug="lmstudio: 스트리밍 도중 시간 초과",
+                                status=f"error: timeout({req.timeout_s}s) - returning what arrived so far",
+                                raw_debug="lmstudio: timed out mid-stream",
                             ),
                             notes,
                         )
@@ -368,7 +368,7 @@ class LMStudioBackend(BaseBackend):
                     if fallback:
                         retried_with_model = True
                         model = fallback
-                        notes.append(f"lmstudio: 모델 미지정 → /v1/models 의 '{fallback}' 사용")
+                        notes.append(f"lmstudio: no model given -> using '{fallback}' from /v1/models")
                         continue
                 status = "rate_limited" if detect_rate_limit(body) else f"error: LM Studio HTTP {resp.status_code}"
                 return (
@@ -384,7 +384,7 @@ class LMStudioBackend(BaseBackend):
             if not choices:
                 return (
                     LLMResponse(
-                        status="error: LM Studio 응답에 choices 가 없음",
+                        status="error: the LM Studio response has no choices",
                         raw_debug=json.dumps(data, ensure_ascii=False)[:2000],
                     ),
                     notes,
@@ -450,10 +450,10 @@ class LMStudioBackend(BaseBackend):
         completion = usage.get("completion_tokens") or reasoning
         return LLMResponse(
             status=(
-                f"error: 추론 토큰이 max_tokens 를 다 썼습니다 "
-                f"(추론 {reasoning} / 한도 {completion} 토큰, 본문 0). "
-                f"max_tokens 를 올리세요 — 이 모델은 답을 쓰기 전에 숨은 추론을 먼저 "
-                f"하는데 그 분량도 max_tokens 에 들어갑니다."
+                f"error: reasoning tokens used up the whole max_tokens budget "
+                f"(reasoning {reasoning} / limit {completion} tokens, 0 for the answer). "
+                f"Raise max_tokens - this model thinks before it answers and that hidden "
+                f"output counts against max_tokens too."
             ),
             raw_debug=(
                 f"finish_reason=length reasoning_tokens={reasoning} "
@@ -468,7 +468,7 @@ class LMStudioBackend(BaseBackend):
         if isinstance(exc, (requests.ConnectionError,)):
             status = CONNECT_ERROR_MSG
         elif isinstance(exc, requests.Timeout):
-            status = f"error: timeout({int(duration)}s) — LM Studio 응답 지연"
+            status = f"error: timeout({int(duration)}s) - LM Studio was too slow to respond"
         else:
             status = f"error: {type(exc).__name__}: {exc}"
         return LLMResponse(
@@ -598,9 +598,10 @@ def list_model_ids(timeout_s: float = 1.5) -> list:
         # 조용히 빈 목록을 돌려주면 사용자는 "드롭다운이 안 뜬다" 까지만 보이고
         # 원인을 알 길이 없다. 실제로 이 증상을 찾는 데 라이브 probe 가 필요했다.
         _warn_once(
-            "LM Studio 모델 목록을 받지 못했습니다 (%s). lmstudio_model 드롭다운이 "
-            "'(auto)' 하나만 남습니다. 401 이면 LM Studio 의 API key 가 켜져 있는 것이니 "
-            "환경변수 LM_STUDIO_API_KEY 나 lm_studio_token.txt 에 토큰을 넣으세요."
+            "Could not fetch the LM Studio model list (%s). The lmstudio_model "
+            "dropdown will only show '(auto)'. A 401 means LM Studio has its API key "
+            "enabled - put the token in the LM_STUDIO_API_KEY environment variable "
+            "or in lm_studio_token.txt."
             % ", ".join(problems)
         )
 

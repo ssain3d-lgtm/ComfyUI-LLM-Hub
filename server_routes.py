@@ -35,7 +35,7 @@ def register() -> bool:
             payload = {}
         node_id = payload.get("node")
         if node_id is None:
-            return web.json_response({"ok": False, "error": "node 가 없습니다"}, status=400)
+            return web.json_response({"ok": False, "error": "missing 'node'"}, status=400)
         cancel.request_stop(node_id)
         return web.json_response({"ok": True, "node": str(node_id)})
 
@@ -52,7 +52,7 @@ def register() -> bool:
             report = health.collect()
         except Exception as exc:  # 진단이 죽으면 진단할 방법이 없어진다
             return web.json_response(
-                {"ok": False, "error": f"진단 실패: {exc!r}"}, status=500
+                {"ok": False, "error": f"diagnostics failed: {exc!r}"}, status=500
             )
 
         if request.query.get("json"):

@@ -33,7 +33,7 @@ def get_backend(name: str) -> BaseBackend:
 
         return GeminiBackend()
 
-    raise ValueError(f"알 수 없는 백엔드입니다: {name} (가능: {', '.join(BACKEND_NAMES)})")
+    raise ValueError(f"Unknown backend: {name} (available: {', '.join(BACKEND_NAMES)})")
 
 
 __all__ = ["get_backend", "BACKEND_NAMES", "BaseBackend", "LLMRequest", "LLMResponse"]

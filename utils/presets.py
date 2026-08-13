@@ -93,7 +93,7 @@ def load_presets() -> dict:
     except Exception as exc:
         # JSON 이 깨져도 노드는 떠야 한다. 대신 이유는 남긴다 --
         # 조용히 빈 목록이 되면 "프리셋이 왜 안 보이지" 로만 보인다.
-        print(f"[LLM Hub] system_prompts.json 을 읽지 못했습니다: {exc!r}")
+        print(f"[LLM Hub] could not read system_prompts.json: {exc!r}")
         presets = {}
 
     _CACHE.update(mtime=mtime, presets=presets)
@@ -126,10 +126,10 @@ def resolve(preset_name: str, system_prompt: str) -> tuple:
     presets = load_presets()
     if name not in presets:
         return typed, (
-            f"preset: '{name}' 을(를) system_prompts.json 에서 찾지 못해 무시했습니다"
+            f"preset: '{name}' not found in system_prompts.json, ignored"
         )
 
     text = presets[name]
     if typed:
-        return f"{text}\n\n{typed}", f"preset: '{name}' + system_prompt 입력을 이어붙였습니다"
-    return text, f"preset: '{name}' 적용"
+        return f"{text}\n\n{typed}", f"preset: '{name}' plus the system_prompt box, appended in that order"
+    return text, f"preset: '{name}' applied"
