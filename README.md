@@ -288,7 +288,7 @@ never committed to git.)
   },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
-    "gemini_model": "gemini-2.5-flash",
+    "gemini_model": "gemini-3-flash",
     "gemini_approval_mode": "plan",
     "claude_system_prompt_mode": "append"
   },
@@ -700,7 +700,7 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
   },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
-    "gemini_model": "gemini-2.5-flash",
+    "gemini_model": "gemini-3-flash",
     "gemini_approval_mode": "plan",
     "claude_system_prompt_mode": "append"
   },

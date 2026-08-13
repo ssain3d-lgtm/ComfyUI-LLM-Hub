@@ -155,6 +155,11 @@ ComfyUI-LLM-Hub/            # = 저장소 루트 (custom_nodes/ 아래로 clone)
 - claude / codex: 빈값이면 `--model`/`-m` 플래그 자체를 생략(CLI 기본값 사용)
 - gemini: 빈값이면 `config.json`의 `defaults.gemini_model`(기본 `"gemini-2.5-flash"` — Pro 모델은 구독 쿼터 소진이 빠르므로 명시 시에만)
 
+<!-- 수정(gemini 기본 모델): 실측(2026-08-12, gemini-cli 0.55.1) 결과 기본값을
+     "gemini-3-flash" 로 잡았다. Flash 를 쓴다는 원칙은 그대로다.
+     README 의 설정 예시 두 곳이 2.5 로 남아 있었는데(공개 직전 점검에서 발견),
+     그대로 복사하면 구버전 모델이 고정되므로 config.example.json 값에 맞췄다. -->
+
 <!-- 수정(lmstudio 기본 모델): LM Studio 실서버를 이 환경에서 띄울 수 없어 양쪽 경로를 모두 구현했다.
      model 을 생략해 보내고, 서버가 모델 관련 4xx(400/404/422 + 본문에 "model")로 거절하면
      /v1/models 의 첫 모델로 딱 1회 재시도한다. 두 경로 모두 가짜 서버로 테스트했다. -->
