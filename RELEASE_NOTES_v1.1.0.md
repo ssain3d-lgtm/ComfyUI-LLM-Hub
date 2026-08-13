@@ -1,130 +1,164 @@
-v1.0.0 이후 백엔드가 하나 늘고, 실제 ComfyUI 에서 써 보면서 걸리던 것들을 걷어냈습니다.
-노드가 보여주는 텍스트는 전부 영어가 됐고, 테스트는 138종에서 **293종**이 됐습니다.
+Since v1.0.0 one more backend was added, and the friction found by actually running
+this inside ComfyUI has been cleared out. Everything the node shows you is now in
+English, and the test count went from 138 to **293**.
 
-## 새로 생긴 것
+## New
 
-### 시스템 프롬프트 편집창
+### System prompt editor
 
-노드의 입력칸은 작아서 긴 프롬프트를 붙여넣으면 전체가 안 보입니다.
-제목 줄의 **`✎ System prompt`** 버튼을 누르면 큰 창이 열립니다.
+The input box on the node is small, so long prompts are hard to read and paste into.
+Click **`✎ System prompt`** on the title bar to open a full-size editor.
 
 ```
 ┌─ System prompt ───────────────────────────────── ✕ ┐
 │ [ my translator ▾ ] [Load] [Save as…] [Delete]      │
 │ ┌────────────────────────────────────────────────┐ │
-│ │  (큰 편집칸 — 붙여넣어도 전체가 보입니다)        │ │
+│ │  (large editor — pasted text is fully visible)  │ │
 │ └────────────────────────────────────────────────┘ │
 │ Ctrl+Enter to apply · Esc to cancel [Cancel][Apply] │
 └─────────────────────────────────────────────────────┘
 ```
 
-- **Save as…** 로 지금 쓴 프롬프트를 이름 붙여 저장하고, **Load** 로 나중에 그대로 불러옵니다
-- 노드 맨 아래 `system_preset` 드롭다운으로도 불러올 수 있습니다
-- **Esc** / **Cancel** / 바깥 클릭은 노드를 건드리지 않고 닫습니다
+- **Save as…** stores the prompt you just wrote under a name; **Load** brings it back later
+- The `system_preset` dropdown at the bottom of the node loads one too
+- **Esc** / **Cancel** / clicking outside closes without touching the node
 
-저장 위치는 `system_prompts.json` 입니다. `config.json` 과 같은 규칙이라 **git 추적 대상이 아니고**, `git pull` 이 여러분의 프리셋을 덮어쓰지 않습니다. 저장을 브라우저가 아니라 서버가 하므로 다른 브라우저나 다른 기기에서 열어도 그대로 있습니다.
+Presets live in `system_prompts.json`. It follows the same rule as `config.json`: **not
+tracked by git**, so `git pull` never overwrites your presets. The server does the
+saving, not the browser, so they are still there from another browser or machine.
 
-### OpenAI 호환 백엔드 (`openai_compat`)
+### OpenAI-compatible backend (`openai_compat`)
 
-Ollama · vLLM · llama.cpp 를 같은 노드로 씁니다. 셋 다 OpenAI 호환 `/v1/chat/completions` 를 제공하므로 새로 짜지 않고 **LM Studio 로 검증된 코드 경로를 그대로 물려받고 주소만 바꿉니다.**
+Use Ollama, vLLM and llama.cpp through the same node. All three expose an
+OpenAI-compatible `/v1/chat/completions`, so rather than writing something new this
+**inherits the code path already verified with LM Studio and only changes the address.**
 
-| 서버 | 기본 주소 |
+| Server | Default address |
 |---|---|
 | Ollama | `http://127.0.0.1:11434` |
 | vLLM | `http://127.0.0.1:8000` |
 | llama.cpp | `http://127.0.0.1:8080` |
 
-노드의 `openai_base_url` 칸에 주소를 넣습니다. LM Studio 전용인 `ttl` 필드는 보내지 않고(엄격한 서버는 400 을 냅니다), `lms unload` 도 실행하지 않습니다. **LM Studio 토큰을 재사용하지 않는 것**도 의도한 것입니다 — 남의 서버에 토큰이 새면 안 되니까요.
+Put the address in the node's `openai_base_url` field. The LM Studio-only `ttl` field
+is not sent (stricter servers return 400) and `lms unload` is not run. **The LM Studio
+token is never reused** either — that is deliberate; sending your token to somebody
+else's server would be a leak.
 
-> ⚠️ **실기기 검증을 하지 못했습니다.** 검증된 코드 경로를 쓰지만 서버마다 다른 부분(SSE 청크 모양, 오류 응답 형식)은 실측 없이 확인할 수 없습니다.
+> ⚠️ **Not verified against real hardware.** It uses a verified code path, but
+> per-server differences (SSE chunk shape, error response format) cannot be confirmed
+> without testing.
 
-### Stop 버튼
+### Stop button
 
-모니터 창 헤더에서 생성을 중간에 끊습니다. ComfyUI 자체 Cancel 도 함께 인식합니다.
-받은 부분까지는 `text` 에 그대로 남고, `status` 는 `ok` 가 아니라 `stopped - ...` 입니다. **잘린 결과를 성공으로 보면 다운스트림이 그대로 쓰게 되므로** 일부러 구분합니다.
+Interrupt a generation from the monitor header. ComfyUI's own Cancel is recognized too.
+Whatever arrived stays in `text`, and `status` is `stopped - ...` rather than `ok`.
+**Treating a truncated result as a success would let downstream nodes consume it**, so
+the two are deliberately distinguished.
 
-### 고급 옵션 접기/펴기 버튼
+### Advanced-options collapse button
 
-제목 줄의 **`▼ Advanced`** 로 여닫습니다. 접으면 `backend` / `prompt` / `system_prompt` / 모델 드롭다운만 남아 노드가 작아집니다. 우클릭 메뉴에도 같은 항목이 있습니다.
+**`▼ Advanced`** on the title bar. Collapsed, only `backend` / `prompt` /
+`system_prompt` and the model dropdown remain, so the node stays small. The same
+toggle is in the right-click menu.
 
-위젯(`addWidget`)이 아니라 캔버스에 직접 그렸습니다. 위젯은 `widgets_values` 배열에 자리를 차지해서, 중간에 하나 끼면 **이 노드로 저장해둔 예전 워크플로우의 값이 전부 한 칸씩 밀립니다.**
+It is drawn on the canvas rather than made with `addWidget` — widgets take a slot in
+the `widgets_values` array, so inserting one in the middle **shifts every stored value
+in workflows already saved with this node**.
 
-### 자가 진단 페이지
+### Self-check page
 
 ```
 http://127.0.0.1:8188/llmhub/health
 ```
 
-CLI 4종이 잡히는지, ffmpeg/cv2 가 있는지, LM Studio 가 응답하는지, 프론트엔드 JS 가 서빙 위치에 있는지, 지금 도는 버전이 몇인지를 한 화면에 보여줍니다. `[FAIL]` 은 필수, `[ -- ]` 는 없어도 되는 항목입니다. `?json=1` 로 기계용 출력.
+Shows, in one screen: whether the four CLIs resolve, whether ffmpeg/cv2 are available,
+whether LM Studio answers, whether the frontend JS is where ComfyUI serves it from,
+and the version actually running. `[FAIL]` is required, `[ -- ]` is optional.
+`?json=1` for machine-readable output.
 
-브라우저 콘솔(F12)에도 `[LLM Hub] v1.1.0 monitor extension loaded` 가 찍힙니다. **이 줄이 없으면 JS 가 아예 로드되지 않은 것**이고, 그게 유일한 판별 수단입니다.
+The browser console (F12) also gets `[LLM Hub] v1.1.0 monitor extension loaded`.
+**No such line means the JS never loaded at all**, and that is the only way to tell.
 
-### 모니터 창 복사 버튼
+### Copy button on the monitor
 
-생성된 텍스트를 클립보드에 담습니다. `text` 출력을 어딘가에 연결하지 않아도 결과를 꺼낼 수 있습니다. LAN 주소(`http://192.168.x.x:8188`)로 접속하면 브라우저가 `navigator.clipboard` 를 막는데, 그 경우 구식 방식으로 폴백합니다.
+Puts the generated text on the clipboard, so you can take it without wiring the `text`
+output anywhere. Opening ComfyUI at a LAN address (`http://192.168.x.x:8188`) makes the
+browser withhold `navigator.clipboard`; there is an older fallback for that case.
 
 ### GitHub Actions CI
 
-PR 마다 테스트가 자동으로 돕니다. Linux(Python 3.10 · 3.12)와 Windows(3.12) 전부 필수 판정입니다.
+Tests run automatically on every pull request. Linux (Python 3.10 · 3.12) and
+Windows (3.12) are all required.
 
-붙이자마자 값을 했습니다. 첫 실행에서 **진단 기능의 실제 버그**를 잡았고, README 가 "Windows 실패 3종" 이라고 적어온 것이 **실은 2종**이며 둘 다 테스트 쪽 문제라는 것도 드러났습니다(둘 다 아래 "고친 것" 참조).
+It paid for itself immediately. The first run caught **a real bug in the self-check**,
+and revealed that the README's long-standing "3 Windows failures" was **actually 2**,
+both of them problems in the tests rather than the product (see "Fixed" below).
 
-## 달라진 것
+## Changed
 
-- **노드가 보여주는 텍스트가 전부 영어입니다.** 위젯 이름·툴팁·버튼·모니터 창·`status` 값·오류 메시지·진단 페이지. 소스 주석은 한국어 그대로입니다
-- **`stream_view=off` 면 모니터 패널이 사라집니다.** 전에는 빈 패널이 240px 를 그대로 차지했습니다. 끄는 이유가 보통 "노드를 작게" 인데 앞뒤가 안 맞았습니다
-- **고급 옵션을 접으면 노드 높이도 같이 줄어듭니다.** 전에는 펼친 크기 그대로 남았습니다
-- **결과가 워크플로우에 저장됩니다.** `OUTPUT_NODE` 라 워크플로우를 다시 열어도 지난 결과가 남아 있습니다. 모니터 창은 실행 중에만 보이는 휘발성이라 이쪽이 보존을 맡습니다
-- **README 가 영문/국문 이중 언어**가 됐습니다
-- **예제 워크플로우 3종**이 **Workflow → Browse Templates** 에 뜹니다
+- **Everything the node shows you is in English**: widget names, tooltips, buttons, the monitor, `status` values, error messages, the self-check page. Source comments stay Korean
+- **`stream_view=off` now removes the monitor panel.** Before, an empty panel still took up 240 px — people turn it off to make the node smaller, so leaving the biggest element in place made no sense
+- **Collapsing the advanced options now shrinks the node too.** It used to stay at the expanded size
+- **Results are saved with the workflow.** `OUTPUT_NODE` means the last result is still there when you reopen it. The monitor is live-only and volatile, so this side handles persistence
+- **The README is bilingual** (English and Korean)
+- **Three example workflows** appear under **Workflow → Browse Templates**
 
-## 고친 것
+## Fixed
 
-### 예전 워크플로우가 죽던 문제 *(가장 심각)*
+### Previously saved workflows were dying *(most serious)*
 
-`openai_base_url` 위젯을 맨 뒤가 아니라 중간에 끼워 넣었습니다. ComfyUI 는 값을 이름이 아니라 **순서**로 저장하므로 그 이전에 저장한 워크플로우는 값이 한 칸씩 밀렸고,
+`openai_base_url` was added in the middle instead of at the end. ComfyUI stores values
+by **position**, not by name, so every workflow saved before that had its values shifted
+by one, and
 
 ```
 error: internal node error - 'bool' object has no attribute 'strip'
 ```
 
-노드가 통째로 죽었습니다. **배포하던 예제 워크플로우 3개가 전부 이 상태였습니다.**
+killed the node outright. **All three shipped example workflows were in that state.**
 
-세 겹으로 고쳤습니다 — 위젯을 맨 뒤로 되돌리고, `WIDGET_ORDER` 로 순서를 명시해 테스트가 대조하게 하고, 타입이 어긋난 값이 들어와도 노드가 죽지 않게 했습니다. 마지막 것이 필요한 이유는 **순서를 고쳐도 이미 저장된 워크플로우는 남기 때문**입니다.
+Fixed in three layers — the widget was moved back to the end, `WIDGET_ORDER` now states
+the order explicitly so a test can compare against it, and wrong-typed values no longer
+crash the node. That last one is needed because **fixing the order does not fix
+workflows that are already saved**.
 
-### 그 외
+### Everything else
 
-- **모델 답변이 통째로 버려지던 버그.** "429가 뭐야?" 같은 질문의 **정답**에 `429` 가 들어 있다는 이유로 `rate_limited` 로 오분류됐습니다. 이제 오류 판정은 stderr 에만 겁니다
-- **`extra_args` 로 읽기 전용 샌드박스를 풀 수 있던 문제** *(보안)*. `--dangerously-*`, `--yolo`, `-s danger-full-access` 같은 플래그를 **값까지 함께** 걸러냅니다. 꼭 필요하면 `config.json` 의 `allow_unsafe_extra_args` 로 엽니다(기본 차단)
-- **한글이 깨지던 문제.** LM Studio SSE 응답에 charset 이 없으면 `requests` 가 ISO-8859-1 로 디코딩합니다
-- **모니터 창이 아예 안 뜨던 문제 두 건.** `WEB_DIRECTORY` 가 한 단계 깊어 JS 가 통째로 404 였고(로그에 아무것도 안 남습니다), 패널을 노드 id 로 찾는데 그 시점의 id 가 `-1` 이었습니다
-- **자가 진단이 거짓 경보를 내던 문제.** claude/codex/gemini 를 필수 항목으로 둬서, LM Studio 만 쓰는 사람의 멀쩡한 설치가 "필수 항목 실패" 로 보였습니다. ffmpeg 을 두고 피하려던 실수를 백엔드에서 그대로 재현한 셈입니다. 이제 백엔드는 전부 선택이고 "확인된 백엔드" 한 줄이 요약합니다 *(CI 첫 실행이 잡았습니다)*
-- **모니터 헤더의 버튼이 세로로 접히던 문제.** 도구 이름이 길어지면 `복사` 가 `복/사` 로 눌렸습니다
-- **사용자 파일을 덮어쓰던 문제.** 미디어를 작업 폴더에 복사할 때 격리된 하위 폴더를 씁니다
-- **`VALIDATE_INPUTS` 가 모든 입력 검증을 무력화하던 문제**
-- **README 의 gemini 기본 모델 표기가 실제 값과 달랐습니다.** 그대로 복사하면 구버전 모델이 고정됩니다
+- **A bug that threw away whole answers.** A correct answer to a question like "what is a 429?" was misclassified as `rate_limited` because it contained `429`. Error detection now only looks at stderr
+- **`extra_args` could unlock the read-only sandbox** *(security)*. Flags like `--dangerously-*`, `--yolo` and `-s danger-full-access` are now filtered out **along with their values**. Open it with `allow_unsafe_extra_args` in `config.json` if you really need to (blocked by default)
+- **Korean text turning to mojibake.** When the LM Studio SSE response has no charset, `requests` decodes it as ISO-8859-1
+- **Two bugs where the monitor never appeared at all.** `WEB_DIRECTORY` was one level too deep so the JS 404'd entirely (with nothing in the log), and the panel was looked up by node id at a moment when that id was still `-1`
+- **The self-check raised a false alarm.** claude/codex/gemini were marked required, so a perfectly good LM Studio-only install reported "required checks failed". It reproduced, in the backends, exactly the false alarm being avoided with ffmpeg. All backends are optional now, with a "backends detected" line summarizing *(caught by the first CI run)*
+- **Monitor header buttons folding vertically.** A long tool name squeezed `Copy` into two stacked characters
+- **Overwriting the user's own files.** Media copied into the working folder now goes to an isolated subfolder
+- **`VALIDATE_INPUTS` was disabling validation for every input**
+- **The README's gemini default model did not match the real value.** Copying it would have pinned an older model
 
-## 검증
+## Verification
 
-- **자동 테스트 293종**(v1.0.0 은 138종), **리눅스와 Windows 양쪽 통과.** PR 마다 CI 가 두 플랫폼을 모두 돌립니다
-- LM Studio 없이 검증하려고 표준 라이브러리로 가짜 서버(SSE 포함)를 만들었습니다
-- claude 실계정 스모크 통과(텍스트/시스템 프롬프트/파일 읽기/이미지/비디오). 이미지 테스트 중 모델의 Bash 시도가 `permission_denials` 로 **실제 차단**되는 것을 확인했습니다
+- **293 automated tests** (v1.0.0 had 138), **passing on both Linux and Windows.** CI runs both platforms on every pull request
+- To verify without LM Studio, a fake server (including SSE) was written with the standard library
+- claude real-account smoke passed (text / system prompt / file reading / image / video). During the image test the model's attempt to use Bash was **actually blocked** via `permission_denials`
 
-## 아직 확인이 필요한 것
+## Still to confirm
 
-- **`openai_compat` 은 실기기 미검증입니다** (Ollama/vLLM/llama.cpp 가 없습니다)
-- **lmstudio / codex / gemini 실계정 스모크 미검증** (로그인 필요). README §8 의 명령으로 확인해 주세요
-- **프론트엔드는 CI 가 검증하지 못합니다.** CI 는 파이썬만 돌립니다 — 편집창, 타이틀 바 버튼, 패널 숨김은 문법 검사와 API 사용 검토만 거쳤습니다
+- **`openai_compat` is unverified against real hardware** (no Ollama/vLLM/llama.cpp available here)
+- **The lmstudio / codex / gemini real-account smokes are unverified** (they need a login). Please check them with the commands in README §8
+- **CI cannot verify the frontend.** It only runs Python — the editor, the title-bar buttons and the panel hiding have had syntax checking and API review only
 
-## 업그레이드
+## Upgrading
 
 ```
 cd ComfyUI/custom_nodes/ComfyUI-LLM-Hub
 git pull
 ```
 
-**ComfyUI 재시작 + 브라우저 하드 새로고침(`Ctrl+Shift+R`)** 이 둘 다 필요합니다. 파이썬은 시작할 때만 읽고, JS 는 브라우저가 캐시합니다 — 하나만 하면 새 기능이 반쯤만 보입니다.
+You need **both a ComfyUI restart and a hard browser refresh (`Ctrl+Shift+R`)**. Python
+is only read at startup and the JS is cached by the browser — doing one without the
+other leaves the new features half-visible.
 
-`git pull` 이 "Already up to date" 라고만 나오면 `main` 이 아니라 피처 브랜치에 서 있는 것입니다. `git branch --show-current` 로 확인하세요.
+If `git pull` only says "Already up to date", you are standing on a feature branch
+rather than `main`. Check with `git branch --show-current`.
 
-호환성이 깨지는 변경은 없습니다. **위젯 순서는 이제 `WIDGET_ORDER` 로 고정**되어 있고 테스트가 대조하므로, 앞으로 이번 같은 사고는 재발하지 않습니다.
+Nothing breaks compatibility. **Widget order is now pinned by `WIDGET_ORDER`** and
+compared by a test, so the kind of accident described above cannot recur.
