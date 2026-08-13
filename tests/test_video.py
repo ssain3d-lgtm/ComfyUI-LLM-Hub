@@ -231,8 +231,8 @@ class TestNodeVideoInputs(unittest.TestCase):
             max_tokens=128, timeout_sec=10, video_max_frames=4, seed=0,
             video_path="/no/such/clip.mp4",
         )
-        self.assertEqual(len(result), 3)
-        self.assertIn("찾을 수 없습니다", result[2])
+        self.assertEqual(len(result["result"]), 3)
+        self.assertIn("찾을 수 없습니다", result["result"][2])
 
 
 if __name__ == "__main__":

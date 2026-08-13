@@ -320,14 +320,18 @@ class TestNodeContract(unittest.TestCase):
 
     def test_returns_three_outputs_on_bad_backend(self):
         node = nodes_mod.LLMHubGenerate()
-        result = node.generate(
+        out = node.generate(
             backend="nope", prompt="hi", system_prompt="", model="",
             file_access=False, workspace_dir="", temperature=0.7,
             max_tokens=128, timeout_sec=10, seed=0,
         )
+        # OUTPUT_NODE 라 {"ui": ..., "result": (...)} 를 돌려준다.
+        result = out["result"]
         self.assertEqual(len(result), 3)
         self.assertEqual(result[0], "")
         self.assertTrue(result[1].startswith("error:"))
+        # ui 에도 같은 내용이 담겨 워크플로우에 저장된다
+        self.assertEqual(out["ui"]["text"], [""])
 
     def test_returns_three_outputs_on_bad_workspace(self):
         node = nodes_mod.LLMHubGenerate()
@@ -335,7 +339,7 @@ class TestNodeContract(unittest.TestCase):
             backend="lmstudio", prompt="hi", system_prompt="", model="",
             file_access=True, workspace_dir="", temperature=0.7,
             max_tokens=128, timeout_sec=10, seed=0,
-        )
+        )["result"]
         self.assertEqual(len(result), 3)
         self.assertIn("workspace_dir 확인 필요", result[1])
 

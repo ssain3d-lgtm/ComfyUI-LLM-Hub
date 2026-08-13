@@ -1,5 +1,8 @@
 # ComfyUI-LLM-Hub
 
+<img src="example_workflows/icon.png" width="96" align="right" alt="">
+
+
 ComfyUI에서 LLM 백엔드를 드롭다운으로 골라 텍스트를 생성하는 커스텀 노드팩입니다.
 로컬 모델(LM Studio)과 이미 쓰고 있는 구독 CLI(Claude Code / Codex / Gemini)를
 같은 노드 하나로 바꿔가며 쓸 수 있습니다.
@@ -45,6 +48,20 @@ pip 의존성은 **`requests` 하나**입니다.
 비디오 프레임 추출에는 **ffmpeg**(외부 실행 파일)을 씁니다 — pip 패키지가 아닙니다. (§5 참조)
 
 ---
+
+### 예제 워크플로우
+
+설치하면 ComfyUI 메뉴의 **Workflow → Browse Templates** 에서 이 팩의 예제를 바로 열 수 있습니다.
+(`example_workflows/` 폴더가 자동으로 인식됩니다.)
+
+| 예제 | 내용 |
+|---|---|
+| `01_image_prompt` | 이미지 프롬프트 생성 — `text` 를 CLIP Text Encode 로 연결 |
+| `02_read_folder` | 지정 폴더의 문서를 읽고 요약 (`file_access`) |
+| `03_lmstudio_vram` | LM Studio 로컬 모델 + 응답 직후 VRAM 자동 해제 |
+
+각 예제에는 무엇을 준비해야 하는지 적은 메모 노드가 함께 들어 있습니다.
+폴더 경로처럼 환경마다 다른 값은 예시로 채워져 있으니 본인 경로로 바꿔 쓰세요.
 
 ## 2. 백엔드별 사전 준비
 

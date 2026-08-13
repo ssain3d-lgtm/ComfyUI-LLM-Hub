@@ -1,0 +1,111 @@
+{
+  "last_node_id": 2,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 2,
+      "type": "Note",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        460,
+        130
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "text": ""
+      },
+      "widgets_values": [
+        "이미지 프롬프트 생성\n\nbackend 를 골라 쓰세요. claude/codex/gemini 는 각 CLI 로그인이,\nlmstudio 는 서버 실행이 필요합니다.\ntext 출력을 CLIP Text Encode 에 연결하면 됩니다."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 1,
+      "type": "LLMHubGenerate",
+      "pos": [
+        40,
+        200
+      ],
+      "size": [
+        420,
+        520
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        },
+        {
+          "name": "debug",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LLMHubGenerate",
+        "showAdvanced": false
+      },
+      "widgets_values": [
+        "claude",
+        "눈 내리는 밤의 한옥 마을, 따뜻한 창문 불빛",
+        "너는 이미지 생성 프롬프트 작성기다. 설명이나 인사 없이 쉼표로 구분된 영어 태그만 한 줄로 출력한다.",
+        "",
+        false,
+        "",
+        0.7,
+        2048,
+        300,
+        0,
+        "randomize",
+        8,
+        "plain",
+        "",
+        "",
+        "",
+        "(auto)",
+        300,
+        true,
+        "(auto)"
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

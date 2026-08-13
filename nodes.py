@@ -43,6 +43,11 @@ class LLMHubGenerate:
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("text", "status", "debug")
     FUNCTION = "generate"
+    # 결과를 노드에 남기면서 동시에 아래로 흘려보낸다.
+    # 모니터 창(웹소켓)은 실행 중에만 보이는 휘발성이라, 워크플로우를 다시 열면
+    # 아무것도 남지 않는다. OUTPUT_NODE + {"ui": ...} 는 저장되는 쪽이다.
+    # 둘은 대체재가 아니라 보완재다 -- 라이브는 모니터가, 보존은 이쪽이 맡는다.
+    OUTPUT_NODE = True
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -254,11 +259,14 @@ class LLMHubGenerate:
             if response.raw_debug:
                 debug_parts.append(response.raw_debug)
 
-            return (
-                response.text or "",
-                response.status,
-                truncate_debug("\n".join(p for p in debug_parts if p)),
-            )
+            text_out = response.text or ""
+            debug_out = truncate_debug("\n".join(p for p in debug_parts if p))
+            return {
+                # ui 는 노드에 표시되고 워크플로우에 저장된다.
+                "ui": {"text": [text_out], "llmhub_status": [response.status]},
+                # result 는 그대로 아래 노드로 흐른다(터미널 노드가 되지 않게).
+                "result": (text_out, response.status, debug_out),
+            }
 
         except Exception as exc:
             # 실패해도 모니터링 창이 "생성 중..." 으로 멈춰 있지 않게 마무리한다.
@@ -267,11 +275,11 @@ class LLMHubGenerate:
                     emitter.finish(status=f"error: {type(exc).__name__}")
                 except Exception:
                     pass
-            return (
-                "",
-                f"error: 노드 내부 오류 — {type(exc).__name__}: {exc}",
-                truncate_debug(traceback.format_exc()),
-            )
+            status_out = f"error: 노드 내부 오류 — {type(exc).__name__}: {exc}"
+            return {
+                "ui": {"text": [""], "llmhub_status": [status_out]},
+                "result": ("", status_out, truncate_debug(traceback.format_exc())),
+            }
 
 
 NODE_CLASS_MAPPINGS = {"LLMHubGenerate": LLMHubGenerate}
