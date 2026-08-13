@@ -257,6 +257,9 @@ function createPanel(node) {
     },
     setStatus(status, elapsed, done) {
       statusEl.textContent = status || (done ? "완료" : "생성 중...");
+      // 한 줄로 잘리므로, 잘린 내용은 마우스를 올려 볼 수 있게 남긴다.
+      // (도구 사용 줄은 파일 경로가 길어서 거의 항상 잘린다.)
+      statusEl.title = statusEl.textContent;
       statusEl.classList.toggle("llmhub-running", !done);
       metaEl.textContent = elapsed != null ? `${elapsed}s` : "";
       // 돌고 있을 때만 보인다. 멈출 것이 없을 때 눌러봐야 아무 일도 안 일어나는
@@ -694,6 +697,11 @@ style.textContent = `
    margin-left:auto 를 Stop 에 걸면 버튼 줄이 상태에 따라 좌우로 튄다. */
 .llmhub-copy { margin-left: auto; }
 .llmhub-copy, .llmhub-stop {
+  /* flex 기본값은 줄어들 수 있음(shrink:1) 이라, 상태 문구가 길어지면
+     버튼 폭이 글자 하나 너비까지 눌려서 "복/사" 처럼 세로로 접힌다.
+     도구 이름이 긴 실행에서 실제로 그렇게 됐다. */
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 1px 8px;
   font-size: 11px;
   line-height: 16px;
@@ -731,6 +739,16 @@ style.textContent = `
   color: var(--descrip-text, #999);
   flex: 0 0 auto;
 }
+/* 상태 문구만 줄어든다. 길면 말줄임하고 전체 내용은 마우스를 올리면 보인다.
+   여기서 줄바꿈을 허용하면 생성 중에 헤더 높이가 들쭉날쭉해서 눈에 거슬린다.
+   min-width:0 이 없으면 flex 항목이 내용보다 작아지지 않아 말줄임이 안 걸린다. */
+.llmhub-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.llmhub-meta { flex: 0 0 auto; }
 .llmhub-status.llmhub-running::before {
   content: "●"; margin-right: 5px; color: #4caf50;
   animation: llmhub-blink 1s steps(2, start) infinite;

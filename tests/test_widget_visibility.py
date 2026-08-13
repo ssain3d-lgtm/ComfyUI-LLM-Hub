@@ -236,6 +236,26 @@ class TestMonitorPanel(unittest.TestCase):
         body = body.split("\n  });", 1)[0]
         self.assertIn("if (!text)", body)
 
+    def test_buttons_never_shrink_or_wrap(self):
+        """상태 문구가 길면 버튼이 눌려서 "복/사" 처럼 세로로 접힌다 (실제로 겪음).
+
+        flex 기본값이 shrink:1 이라 글자 하나 너비까지 줄어든다. 도구 이름에
+        파일 경로가 붙는 실행에서 재현됐다.
+        """
+        body = self.javascript.split(".llmhub-copy, .llmhub-stop {", 1)[1]
+        body = body.split("\n}", 1)[0]
+        self.assertIn("flex: 0 0 auto", body)
+        self.assertIn("white-space: nowrap", body)
+
+    def test_status_truncates_instead_of_pushing_buttons(self):
+        """줄바꿈을 허용하면 생성 중에 헤더 높이가 들쭉날쭉해진다."""
+        body = self.javascript.split(".llmhub-status {", 1)[1].split("\n}", 1)[0]
+        # min-width:0 이 없으면 flex 항목이 내용보다 작아지지 않아 말줄임이 안 걸린다
+        self.assertIn("min-width: 0", body)
+        self.assertIn("text-overflow: ellipsis", body)
+        # 잘린 내용을 볼 방법이 있어야 한다
+        self.assertIn("statusEl.title", self.javascript)
+
     def test_panel_buttons_do_not_drag_the_node(self):
         """캔버스가 클릭을 먼저 삼키면 버튼이 눌리지 않고 노드만 움직인다."""
         body = self.javascript.split("캔버스가 이 클릭을", 1)[1].split("\n  }", 1)[0]
