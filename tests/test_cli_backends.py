@@ -292,7 +292,9 @@ class TestGeminiBackend(unittest.TestCase):
             self._backend().generate(
                 LLMRequest("gemini", "", "", "설명해", image_paths=[png])
             )
-        self.assertIn("@_llmhub_media/sample.png", fake.stdin)
+        # Windows 에서는 os.path.join 이 역슬래시를 낸다. 그게 맞는 동작이라
+        # (네이티브 프로그램에 네이티브 구분자를 준다) 단정 쪽을 정규화한다.
+        self.assertIn("@_llmhub_media/sample.png", fake.stdin.replace("\\", "/"))
 
     def test_auth_error_code_41(self):
         payload = json.dumps(

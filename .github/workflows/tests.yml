@@ -25,15 +25,16 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p "test_*.py" -v
 
-  # Windows is informational only. Three tests fail there for reasons that are
-  # not defects: two assert "/" as the path separator when passing media to
-  # gemini, one looks for an English string inside a Korean message. Making
-  # this job required would paint the repo red for a known, documented
-  # baseline — but dropping Windows entirely would hide real regressions on
-  # the platform this pack is actually used on.
+  # Windows matters: it is the platform this pack is actually used on.
+  #
+  # This job started as `continue-on-error: true` because the README claimed a
+  # baseline of three known Windows failures. The first real CI run found two,
+  # both assertions expecting "/" as the path separator — the product was
+  # right, the tests were Linux-naive. With those fixed the baseline is zero,
+  # so this job is now required like the Linux ones. A red Windows job means a
+  # real regression.
   windows:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

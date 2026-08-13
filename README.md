@@ -379,10 +379,16 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**251 tests, all passing on Linux. Three fail on Windows.** All three come from
-Linux assumptions, not functional defects — two assert `/` as the path separator when
-passing media to gemini, and one looks for an English string inside a Korean message.
-Treat the Windows baseline as **3**, not 0; anything above that is a regression.
+**255 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
+Windows on 3.12.
+
+Earlier versions of this file claimed three tests failed on Windows. When CI actually
+ran there, the count was **two**, and both were assertions expecting `/` as the path
+separator — the product was right (it hands a Windows program Windows separators), the
+test was Linux-naive. Both are fixed. The baseline is now **0 on both platforms**.
+
+Five tests skip when `ffmpeg` is absent; that is expected, not a failure.
 
 Smoke tests against real backends (requires a logged-in environment):
 
@@ -788,11 +794,16 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**251종이며 리눅스에서 전부 통과합니다. Windows 에서는 3종이 실패합니다.** 전부
-리눅스 가정에서 온 것이고 기능 결함이 아닙니다 — gemini 에 미디어를 넘길 때 경로
-구분자를 `/` 로 기대하는 단정 2건, 한국어 메시지에서 영어 문자열을 찾는 단정
-1건입니다. Windows 기준선은 0이 아니라 **3** 이라고 보고, 그보다 늘어났으면
-회귀입니다.
+**255종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
+Windows 는 3.12.
+
+이전 판에는 "Windows 에서 3종 실패" 라고 적혀 있었습니다. **CI 를 실제로 돌려보니
+2종이었고**, 둘 다 경로 구분자를 `/` 로 기대하는 단정이었습니다 — 네이티브
+프로그램에 네이티브 구분자를 넘기는 제품 동작이 옳고 테스트가 리눅스 가정이었던
+것입니다. 둘 다 고쳤습니다. **이제 기준선은 양쪽 다 0** 입니다.
+
+`ffmpeg` 이 없으면 5종이 skip 됩니다. 이건 실패가 아니라 정상입니다.
 
 실제 백엔드 스모크 테스트(로그인된 환경 필요):
 

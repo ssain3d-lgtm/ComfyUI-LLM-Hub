@@ -21,12 +21,18 @@ import sys
 
 _HTTP_TIMEOUT_S = 2.0
 
-# 진단 대상 CLI. lms 는 LM Studio 의 즉시 VRAM 해제에만 쓰이므로 없어도 치명적이지
-# 않다 -- 그 구분을 optional 로 표시한다.
+# 진단 대상 CLI. 전부 optional 이다.
+#
+# 처음에는 claude/codex/gemini 를 필수로 뒀는데, 그러면 LM Studio 만 쓰는 사람의
+# 멀쩡한 설치가 "필수 항목 실패: claude, codex, gemini" 로 보인다 -- ffmpeg 을
+# 두고 피하려던 거짓 경보를 백엔드에서 그대로 재현한 셈이었다(CI 가 잡았다).
+#
+# 어느 백엔드가 필요한지는 노드에서 무엇을 고르느냐에 달려 있고, 진단 시점에는
+# 알 수 없다. 대신 "지금 쓸 수 있는 게 하나라도 있는가" 를 아래 요약 줄이 알려준다.
 _CLIS = [
-    ("claude", False),
-    ("codex", False),
-    ("gemini", False),
+    ("claude", True),
+    ("codex", True),
+    ("gemini", True),
     ("lms", True),
 ]
 
@@ -146,6 +152,32 @@ def _check_config() -> dict:
     }
 
 
+def _backend_summary(checks: list) -> dict:
+    """지금 바로 쓸 수 있는 백엔드를 한 줄로 요약한다.
+
+    개별 백엔드는 전부 선택 항목이라 하나씩 보면 "그래서 쓸 수 있는 게 있다는
+    거야 없다는 거야" 가 안 나온다. 이 줄이 그 답이다.
+
+    openai_compat 은 뺀다. 주소를 노드에서 넣는 구조라 진단 시점에 무엇을
+    두드려야 하는지 알 수 없고, 모르는 것을 "없음" 으로 적으면 거짓말이 된다.
+    """
+    ok_by_name = {c["name"]: c["ok"] for c in checks}
+    ready = [name for name in ("claude", "codex", "gemini") if ok_by_name.get(name)]
+    if ok_by_name.get("LM Studio"):
+        ready.append("lmstudio")
+
+    return {
+        "name": "확인된 백엔드",
+        "optional": True,
+        "ok": bool(ready),
+        "detail": (
+            ", ".join(ready) if ready else
+            "자동으로 확인된 것이 없습니다. 위 항목 중 필요한 것 하나만 준비하면 됩니다 "
+            "(openai_compat 은 주소를 알 수 없어 확인 대상이 아닙니다)"
+        ),
+    }
+
+
 def collect() -> dict:
     """진단 결과를 모은다. 어떤 항목이 실패해도 전체가 죽지 않는다."""
     checks = []
@@ -154,9 +186,11 @@ def collect() -> dict:
     checks.extend(_check_clis())
     checks.extend(_check_video())
     checks.append(_check_lmstudio())
+    checks.append(_backend_summary(checks))
 
-    # 필수 항목만 전체 판정에 넣는다. ffmpeg 이 없다고 "고장" 이라고 하면
-    # 비디오를 안 쓰는 사람에게 거짓 경보가 된다.
+    # 필수 항목만 전체 판정에 넣는다. 여기서 "필수" 는 노드팩 자체가 성립하는가
+    # 이지, 사용자의 백엔드 준비 상태가 아니다. ffmpeg 이나 claude 가 없다고
+    # "고장" 이라고 하면 그것을 안 쓰는 사람에게 거짓 경보가 된다.
     required_failed = [c["name"] for c in checks if not c["optional"] and not c["ok"]]
 
     return {
@@ -191,8 +225,9 @@ def as_text(report: dict = None) -> str:
 
     lines.append("")
     if report["ok"]:
-        lines.append("필수 항목은 모두 정상입니다.")
+        lines.append("노드팩 자체는 정상입니다.")
         lines.append("[ -- ] 는 없어도 되는 항목입니다 (해당 기능만 못 씁니다).")
+        lines.append("쓰려는 백엔드가 [ -- ] 라면 그 줄의 설명대로 준비하면 됩니다.")
     else:
         lines.append(f"필수 항목 실패: {', '.join(report['failed'])}")
     lines.append("")

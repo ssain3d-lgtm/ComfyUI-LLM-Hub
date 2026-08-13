@@ -86,6 +86,43 @@ class TestCollect(unittest.TestCase):
         for check in optional_failed:
             self.assertNotIn(check["name"], report["failed"])
 
+    def test_no_backend_is_required(self):
+        """어느 백엔드가 필요한지는 노드에서 무엇을 고르느냐에 달려 있다.
+
+        처음에는 claude/codex/gemini 를 필수로 뒀는데, 그러면 LM Studio 만 쓰는
+        사람의 멀쩡한 설치가 '필수 항목 실패' 로 보인다. CI 가 잡은 실제 버그다.
+        """
+        report = health.collect()
+        for name in ("claude", "codex", "gemini", "lms", "LM Studio"):
+            entry = next((c for c in report["checks"] if c["name"] == name), None)
+            self.assertIsNotNone(entry, f"{name} 항목이 사라졌다")
+            self.assertTrue(entry["optional"], f"{name}: 필수로 두면 거짓 경보가 된다")
+
+    def test_only_pack_integrity_is_required(self):
+        """'필수' 는 노드팩 자체가 성립하는가이지 사용자의 준비 상태가 아니다."""
+        report = health.collect()
+        required = [c["name"] for c in report["checks"] if not c["optional"]]
+        self.assertEqual(required, ["프론트엔드 JS"])
+
+    def test_backend_summary_lists_what_is_ready(self):
+        checks = [
+            {"name": "claude", "optional": True, "ok": True, "detail": ""},
+            {"name": "gemini", "optional": True, "ok": False, "detail": ""},
+            {"name": "LM Studio", "optional": True, "ok": True, "detail": ""},
+        ]
+        summary = health._backend_summary(checks)
+        self.assertTrue(summary["ok"])
+        self.assertIn("claude", summary["detail"])
+        self.assertIn("lmstudio", summary["detail"])
+        self.assertNotIn("gemini", summary["detail"])
+
+    def test_backend_summary_does_not_claim_openai_compat_is_missing(self):
+        """주소를 노드에서 넣는 구조라 진단이 알 수 없다. 모르는 걸 '없음' 이라 하면 거짓말이다."""
+        summary = health._backend_summary([])
+        self.assertFalse(summary["ok"])
+        self.assertTrue(summary["optional"], "이게 필수면 새 설치가 전부 빨갛게 보인다")
+        self.assertIn("openai_compat", summary["detail"])
+
     def test_an_unexpected_error_is_reported_not_raised(self):
         """진단이 예외로 죽으면 진단할 방법 자체가 사라진다."""
         proc = importlib.import_module(f"{_PACK_NAME}.utils.proc")
