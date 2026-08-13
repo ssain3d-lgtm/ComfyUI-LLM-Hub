@@ -8,7 +8,7 @@ import traceback
 from .backends import BACKEND_NAMES, get_backend
 from .backends.base import LLMRequest, truncate_debug
 from .backends.lmstudio import list_model_ids
-from .utils import cancel, image_io, stream, video_io
+from .utils import cancel, image_io, presets, stream, video_io
 
 # lmstudio_model 드롭다운의 첫 항목 (= 노드의 model 칸/설정을 따름)
 AUTO_MODEL = "(auto)"
@@ -54,36 +54,43 @@ class LLMHubGenerate:
         return {
             "required": {
                 "backend": (BACKEND_NAMES, {
-                    "tooltip": "사용할 LLM. lmstudio=로컬 / claude·codex·gemini=구독 CLI. "
-                               "각 백엔드는 로그인/실행이 미리 돼 있어야 한다.",
+                    "tooltip": "Which LLM to use. lmstudio/openai_compat = local server, "
+                               "claude/codex/gemini = subscription CLIs. Each backend must "
+                               "already be installed and logged in.",
                 }),
                 "prompt": ("STRING", {"multiline": True, "default": "",
-                    "tooltip": "유저 프롬프트. 여기에 시킬 일을 적는다."}),
+                    "tooltip": "The user prompt. Write what you want done here."}),
                 "system_prompt": ("STRING", {"multiline": True, "default": "",
-                    "tooltip": "역할/말투/제약 지시. 비워도 된다."}),
+                    "tooltip": "Role, tone and constraints. May be left empty."}),
                 "model": ("STRING", {"default": "",
-                    "tooltip": "모델 이름. 비우면 백엔드 기본값. "
-                               "lmstudio 는 아래 lmstudio_model 드롭다운이 우선한다."}),
+                    "tooltip": "Model name. Empty = the backend default. "
+                               "For lmstudio the lmstudio_model dropdown below wins."}),
                 "file_access": ("BOOLEAN", {"default": False,
-                    "tooltip": "켜면 아래 workspace_dir 폴더의 파일을 읽을 수 있다(읽기 전용). "
-                               "파일 내용은 신뢰할 수 없는 입력이니 필요한 폴더만 좁게 지정."}),
+                    "tooltip": "Let the model read files inside workspace_dir (read-only). "
+                               "File contents are untrusted input, so point it at the "
+                               "narrowest folder that works."}),
                 "workspace_dir": ("STRING", {"default": "",
-                    "tooltip": "작업 루트 폴더 절대경로. file_access 를 켰다면 필수. 예: C:\\\\work\\\\docs"}),
+                    "tooltip": "Absolute path of the working root folder. Required when "
+                               "file_access is on. Example: C:\\\\work\\\\docs"}),
                 "temperature": (
                     "FLOAT",
                     {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.05,
-                     "tooltip": "창의성(0=일관, 높을수록 다양). lmstudio 에만 적용, CLI 3종은 무시."},
+                     "tooltip": "Creativity (0 = consistent, higher = more varied). "
+                                "Applies to lmstudio/openai_compat only; the three CLIs "
+                                "ignore it."},
                 ),
                 # 상한은 32768 이었는데 근거가 없었다. LM Studio 에 올라와 있는 모델들의
                 # max_context_length 를 조회해보면 전부 262144 라, 위젯이 실제 능력의
                 # 1/8 에서 막고 있었다. 상한만 키우는 것이라 저장된 워크플로우는 영향이 없다.
                 "max_tokens": ("INT", {"default": 2048, "min": 1, "max": 262144,
-                    "tooltip": "최대 생성 토큰. lmstudio 에만 적용, CLI 3종은 무시. "
-                               "추론 모델은 답을 쓰기 전에 숨은 사고 과정을 먼저 뱉고 "
-                               "그 분량도 여기 포함되므로, 작게 잡으면 본문이 빈 채로 "
-                               "잘린다. 1000 이상을 권한다."}),
+                    "tooltip": "Maximum tokens to generate. Applies to lmstudio/"
+                               "openai_compat only; the three CLIs ignore it. Reasoning "
+                               "models emit hidden thinking before the answer and it counts "
+                               "against this budget, so a small value can cut the reply off "
+                               "empty. 1000 or more is recommended."}),
                 "timeout_sec": ("INT", {"default": 300, "min": 10, "max": 3600,
-                    "tooltip": "제한 시간(초). CLI 는 콜드스타트에 몇 초 걸리니 넉넉히."}),
+                    "tooltip": "Time limit in seconds. The CLIs need a few seconds of cold "
+                               "start, so leave room."}),
                 # seed 값 자체는 사용하지 않는다 (DESIGN §5-4).
                 "seed": (
                     "INT",
@@ -92,69 +99,96 @@ class LLMHubGenerate:
                         "min": 0,
                         "max": 0xFFFFFFFF,
                         "control_after_generate": True,
-                        "tooltip": "값 자체는 쓰지 않는다. 바꾸면 ComfyUI 가 '다시 실행'하게 만드는 "
-                                   "캐시 무효화용. 같은 입력을 재생성하려면 값을 바꿔라.",
+                        "tooltip": "The value itself is never used. Changing it is how you "
+                                   "tell ComfyUI the input changed so it runs again instead "
+                                   "of reusing the cache. Change it to regenerate the same "
+                                   "prompt.",
                     },
                 ),
                 # --- 아래는 나중에 추가된 위젯이다. 기존 위젯 뒤에 붙여야
                 #     예전에 저장한 워크플로우의 widgets_values 위치가 밀리지 않는다. ---
                 "video_max_frames": ("INT", {"default": 8, "min": 1, "max": 64,
-                    "tooltip": "비디오를 프레임으로 바꿀 때 뽑을 장수. "
-                               "claude/codex/lmstudio 만 해당(gemini 는 영상을 그대로 넘김)."}),
+                    "tooltip": "How many frames to sample when converting video to images. "
+                               "Applies to claude/codex/lmstudio only — gemini takes the "
+                               "video file as it is."}),
                 "stream_view": (["plain", "markdown", "off"], {"default": "plain",
-                    "tooltip": "노드 안 실시간 창 표시 방식. "
-                               "plain=원문 그대로(프롬프트 생성용) / markdown=렌더링(문서용) / off=끔."}),
+                    "tooltip": "How the live monitor on the node displays text. "
+                               "plain = literal characters (for image prompts) / "
+                               "markdown = rendered (for documents) / "
+                               "off = hidden, which also removes the panel."}),
             },
             "optional": {
-                "image": ("IMAGE", {"tooltip": "멀티모달 이미지 입력(옵션). 4개 백엔드 모두 지원."}),
-                "video": ("VIDEO", {"tooltip": "ComfyUI VIDEO 입력(옵션)."}),
+                "image": ("IMAGE", {
+                    "tooltip": "Multimodal image input (optional). All backends support it."}),
+                "video": ("VIDEO", {"tooltip": "ComfyUI VIDEO input (optional)."}),
                 "video_path": ("STRING", {"default": "",
-                    "tooltip": "비디오 파일 경로 직접 지정(옵션). 지정 시 video 입력보다 우선."}),
+                    "tooltip": "Path to a video file (optional). Takes priority over the "
+                               "video input when both are set."}),
                 "mcp_config": ("STRING", {"default": "",
-                    "tooltip": "MCP 설정 JSON 경로(옵션). claude 만 실제 적용."}),
+                    "tooltip": "Path to an MCP config JSON (optional). Only claude actually "
+                               "applies it."}),
                 "extra_args": ("STRING", {"default": "",
-                    "tooltip": "CLI 에 덧붙일 원시 플래그(고급). 샌드박스를 푸는 위험 플래그는 "
-                               "자동 차단된다."}),
+                    "tooltip": "Raw extra flags for the CLI (advanced). Flags that unlock "
+                               "the read-only sandbox are blocked automatically."}),
                 # --- 나중에 추가된 위젯 (위와 같은 이유로 뒤에 붙인다) ---
                 "lmstudio_model": ([AUTO_MODEL] + list_model_ids(), {
-                    "tooltip": "[lmstudio 전용] 모델 드롭다운. 서버를 켠 뒤 브라우저를 새로고침하면 "
-                               "목록이 채워진다. (auto)=위 model 칸/설정을 따름."}),
+                    "tooltip": "[lmstudio only] Model dropdown. Start the server, then "
+                               "refresh the browser to populate the list. "
+                               "(auto) = follow the model field above and config.json."}),
                 "lmstudio_ttl_sec": ("INT", {"default": _ls_default("ttl_sec", 300),
                     "min": 0, "max": 86400,
-                    "tooltip": "[lmstudio 전용] 유휴 TTL(초). 이 시간 요청이 없으면 VRAM 에서 내림. 0=끔."}),
+                    "tooltip": "[lmstudio only] Idle TTL in seconds. LM Studio unloads the "
+                               "model from VRAM after this long with no request. 0 = off."}),
                 "openai_base_url": ("STRING", {
                     "default": "",
-                    "tooltip": "OpenAI 호환 서버 주소. 비우면 config.json 의 "
-                               "openai_compat.base_url 을 씁니다. "
+                    "tooltip": "Address of the OpenAI-compatible server. Empty = use "
+                               "openai_compat.base_url from config.json. "
                                "Ollama http://127.0.0.1:11434 / "
                                "vLLM http://127.0.0.1:8000 / "
                                "llama.cpp http://127.0.0.1:8080"}),
                 "lmstudio_unload_after": ("BOOLEAN", {"default": _ls_default("unload_after", True),
-                    "tooltip": "[lmstudio 전용] 응답 직후 즉시 VRAM 해제(lms CLI 필요). "
-                               "반복 호출이 잦으면 꺼서 재로드를 피할 수 있다."}),
+                    "tooltip": "[lmstudio only] Unload from VRAM immediately after the "
+                               "response (needs the lms CLI). Turn it off if you call this "
+                               "node repeatedly and reloading each time is too slow."}),
                 # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
                 "claude_model": (CLAUDE_MODELS, {
-                    "tooltip": "[claude 전용] 모델 선택. (auto)=위 model 칸/CLI 기본값. "
-                               "비용은 haiku < opus < sonnet < fable 순으로 커진다"
-                               "(실측 2026-08-12, 같은 호출 기준 haiku 는 opus 의 약 1/3). "
-                               "속도는 모델을 바꿔도 별 차이가 없다 — 매 호출의 약 2초가 "
-                               "claude CLI 를 새로 띄우는 고정비라 그쪽이 병목이다."}),
+                    "tooltip": "[claude only] Model choice. (auto) = the model field above, "
+                               "or the CLI default. Cost rises haiku < opus < sonnet < fable "
+                               "(measured 2026-08-12: for the same call haiku is about a "
+                               "third of opus). Speed barely changes between models — the "
+                               "~2 s of starting the claude CLI on every call is the "
+                               "bottleneck."}),
+                # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
+                #
+                # system_prompt 바로 밑에 두는 편이 자연스럽지만 그렇게 못 한다.
+                # 위젯 순서가 곧 widgets_values 의 순서라, 중간에 끼우면 이 노드로
+                # 저장해둔 예전 워크플로우의 값이 전부 한 칸씩 밀린다.
+                "system_preset": (presets.preset_names(), {
+                    "tooltip": "Pick a saved system prompt from system_prompts.json. "
+                               "(none) = use only the system_prompt box above. When both "
+                               "are set the preset goes first and your text is appended, so "
+                               "you can add a one-off instruction on top of a preset. "
+                               "Edit the file, then refresh the browser to reload this list."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
     @classmethod
-    def VALIDATE_INPUTS(cls, input_types=None, lmstudio_model=None):
-        """lmstudio_model 만 검증을 건너뛴다(다른 입력은 정상 검증됨).
+    def VALIDATE_INPUTS(cls, input_types=None, lmstudio_model=None, system_preset=None):
+        """가변 목록인 두 입력만 검증을 건너뛴다(나머지는 정상 검증됨).
 
-        lmstudio_model 은 LM Studio 를 조회해 만든 가변 목록이라, 서버가 꺼졌거나
-        모델이 언로드되면 목록이 줄어든다. 그때 ComfyUI 기본 검증이 저장된 값을
-        거부해 워크플로우 실행 자체가 실패한다(lmstudio 를 안 쓰는 경우까지).
-        → 이 입력만 통과시키고 실제 처리는 백엔드가 한다.
+        lmstudio_model 은 LM Studio 를 조회해 만든 목록이라 서버가 꺼졌거나
+        모델이 언로드되면 줄어든다. system_preset 은 사용자가 손으로 고치는
+        파일에서 오므로 프리셋 이름을 바꾸거나 지우면 줄어든다.
+
+        그때 ComfyUI 기본 검증이 저장된 값을 거부해 워크플로우 실행 자체가
+        실패한다 -- 해당 기능을 안 쓰는 경우까지 같이 죽는다.
+        → 이 둘만 통과시키고, 목록에 없는 값의 처리는 각자 담당 코드가 한다
+          (presets.resolve 는 무시하고 debug 에 이유를 남긴다).
 
         주의: **kwargs 로 받으면 ComfyUI 가 모든 입력의 검증을 통째로 건너뛴다.
-        그래서 lmstudio_model 만 명시적으로 받아 우회 범위를 이 입력으로 좁힌다.
+        그래서 우회할 입력만 명시적으로 받아 범위를 좁힌다.
         (input_types 는 ComfyUI 가 넘겨주는 표준 인자라 함께 받아 흡수한다.)
         """
         return True
@@ -185,6 +219,7 @@ class LLMHubGenerate:
         video_path="",
         mcp_config="",
         extra_args="",
+        system_preset=presets.PRESET_NONE,
         unique_id=None,
     ):
         # 노드는 어떤 경우에도 예외를 밖으로 던지지 않는다 (DESIGN N4, §5-3).
@@ -197,6 +232,13 @@ class LLMHubGenerate:
             image_paths = []
             video_paths = []
             media_notes = []
+
+            # 프리셋을 시스템 프롬프트에 반영한다. 이름이 목록에 없어도 실패로
+            # 만들지 않고 메모만 남긴다 -- 파일을 고치다 이름이 어긋났다고
+            # 워크플로우 전체가 안 도는 것은 과한 처벌이다.
+            system_prompt, preset_note = presets.resolve(system_preset, system_prompt)
+            if preset_note:
+                media_notes.append(preset_note)
 
             if image is not None:
                 try:

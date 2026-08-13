@@ -248,7 +248,7 @@ def _on_stream_line(line: str, emitter, state) -> None:
     ).lower()
 
     if "tool" in kind or "command" in kind or "exec" in kind:
-        emitter.set_status(f"도구 사용: {kind}")
+        emitter.set_status(f"Tool: {kind}")
         return
 
     piece = _extract_text(event)

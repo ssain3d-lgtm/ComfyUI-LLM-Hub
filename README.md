@@ -21,11 +21,11 @@ same node, switching between them without rewiring anything.
 > **Only `requests` is added to pip.** Everything else uses the standard library or
 > packages ComfyUI already ships.
 
-> **Note on language.** This pack was written for a Korean-speaking author, so the
-> **in-app text is Korean** — widget tooltips, `status` values, and error messages.
-> The English documentation below maps every one of them, and the widget names,
-> config keys and log output are all English. Full localization is not planned for
-> v1; if you want it, open an issue and say so.
+> **Note on language.** Widget names, tooltips, buttons and the on-node monitor are
+> **English**. What is still Korean is the **`status` output and error messages** —
+> e.g. `error: LM Studio 서버 응답 없음`. The troubleshooting table in §7 lists each
+> one with its meaning and fix, and `/llmhub/health` reports in Korean too. If you
+> want those translated as well, open an issue and say so.
 
 ## 1. Installation
 
@@ -135,6 +135,7 @@ dropdown is LM Studio only.
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
 | `openai_base_url` | Address of the OpenAI-compatible server (`openai_compat` only) |
+| `system_preset` | Pick a saved system prompt from `system_prompts.json`. See below |
 | `seed` | **The value itself is never used.** It exists so ComfyUI sees "input changed → run again" and skips the cache |
 | `image` *(optional)* | ComfyUI IMAGE |
 | `video` / `video_path` *(optional)* | ComfyUI VIDEO input, or a path to a video file |
@@ -164,6 +165,45 @@ Stops and timeouts are deliberately **not** `ok`. Treating a truncated result as
 success would let downstream nodes consume it as if it were complete. Even when
 `status` is not `ok`, the node returns an empty `text` and the reason instead of
 raising.
+
+## 3-1. System prompt presets
+
+Keep the system prompts you reuse in **`system_prompts.json`** and pick one from the
+`system_preset` dropdown instead of retyping them.
+
+The file is created from `system_prompts.example.json` on first run and is **not
+tracked by git**, so `git pull` never overwrites your edits. Seven presets ship as
+examples (SDXL / photoreal image prompts, negative prompts, summarizing, translation).
+
+```json
+{
+  "presets": [
+    { "name": "Image prompt (SDXL)",
+      "prompt": [
+        "You write prompts for a text-to-image model.",
+        "Answer with the prompt only - no preamble, no explanation."
+      ] },
+    { "name": "Summarize", "prompt": "Lead with the conclusion, then bullets." }
+  ]
+}
+```
+
+- `prompt` is a **string or a list of strings** joined with newlines — easier to hand-edit than one long line full of `\n`.
+- Order in the file is the order in the dropdown.
+- After editing, **refresh the browser** to reload the list (same as the LM Studio model dropdown).
+
+**Preset and `system_prompt` combine, they don't replace.** With both set, the preset
+goes first and your typed text is appended after a blank line — so a preset can be the
+base persona and the box a one-off instruction. Overwriting would silently discard what
+you just typed.
+
+A preset name that no longer exists (renamed or deleted in the file) is **ignored with a
+note in `debug`**, not treated as an error. Losing a whole workflow run over a renamed
+preset would be a harsh punishment for editing a text file.
+
+> The dropdown sits at the **bottom** of the node rather than next to `system_prompt`.
+> Widget order is what ComfyUI saves values by, so inserting one in the middle would
+> shift every stored value in workflows you already saved.
 
 ## 4. File access
 
@@ -551,6 +591,7 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
 | `openai_base_url` | OpenAI 호환 서버 주소 (`openai_compat` 전용) |
+| `system_preset` | `system_prompts.json` 에 저장해둔 시스템 프롬프트를 고릅니다. 아래 참조 |
 | `seed` | **값 자체는 쓰지 않습니다.** ComfyUI가 "입력이 바뀌었다 → 다시 실행"으로 인식하게 하는 캐시 무효화용입니다 |
 | `image` *(옵션)* | ComfyUI IMAGE |
 | `video` / `video_path` *(옵션)* | ComfyUI VIDEO 입력 또는 비디오 파일 경로 |
@@ -580,6 +621,44 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 `status`가 `ok`가 아니어도 노드는 예외를 던지지 않고 빈 `text`와 함께 이유를 돌려줍니다.
 
 ---
+
+## 3-1. 시스템 프롬프트 프리셋
+
+자주 쓰는 시스템 프롬프트를 **`system_prompts.json`** 에 적어두고 `system_preset`
+드롭다운에서 고릅니다. 매번 같은 문장을 다시 타이핑하지 않아도 됩니다.
+
+파일은 첫 실행 때 `system_prompts.example.json` 을 복사해 만들어지고 **git 추적
+대상이 아닙니다.** `git pull` 이 여러분이 고친 프리셋을 덮어쓰지 않습니다.
+예제로 7개가 들어 있습니다(SDXL·실사 이미지 프롬프트, 네거티브, 요약, 번역).
+
+```json
+{
+  "presets": [
+    { "name": "Image prompt (SDXL)",
+      "prompt": [
+        "You write prompts for a text-to-image model.",
+        "Answer with the prompt only - no preamble, no explanation."
+      ] },
+    { "name": "요약", "prompt": "결론부터 쓰고, 근거는 불릿으로." }
+  ]
+}
+```
+
+- `prompt` 는 **문자열이거나 문자열 목록**입니다. 목록이면 줄바꿈으로 이어집니다 — 한 줄에 `\n` 을 잔뜩 박는 것보다 손으로 고치기 훨씬 낫습니다.
+- 파일에 적은 순서가 드롭다운 순서입니다.
+- 고친 뒤에는 **브라우저를 새로고침**해야 목록이 갱신됩니다 (LM Studio 모델 드롭다운과 같습니다).
+
+**프리셋과 `system_prompt` 는 합쳐집니다. 덮어쓰지 않습니다.** 둘 다 있으면 프리셋이
+앞, 직접 쓴 내용이 빈 줄 뒤에 붙습니다 — 프리셋을 기본 성격으로, 입력칸을 이번
+실행만의 지시로 쓸 수 있습니다. 덮어쓰면 방금 타이핑한 것이 조용히 사라집니다.
+
+목록에 없는 프리셋 이름(파일에서 이름을 바꿨거나 지운 경우)은 **무시하고 `debug` 에
+이유를 남깁니다.** 오류로 처리하지 않습니다 — 텍스트 파일 좀 고쳤다고 워크플로우
+전체가 안 도는 건 과한 처벌입니다.
+
+> 드롭다운이 `system_prompt` 옆이 아니라 노드 **맨 아래**에 있습니다. ComfyUI 는
+> 위젯 순서로 값을 저장하기 때문에, 중간에 끼워 넣으면 이미 저장해둔 워크플로우의
+> 값이 전부 한 칸씩 밀립니다.
 
 ## 4. 파일 접근
 

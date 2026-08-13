@@ -170,7 +170,7 @@ class TestAdvancedButton(unittest.TestCase):
         그때 조작 수단이 통째로 사라지면 고급 옵션을 영영 못 연다.
         """
         self.assertIn("getExtraMenuOptions", self.javascript)
-        self.assertIn("고급 옵션 접기", self.javascript)
+        self.assertIn("Hide advanced options", self.javascript)
 
     def test_both_paths_share_one_toggle(self):
         """버튼과 메뉴가 각자 상태를 뒤집으면 한쪽이 어긋난다."""

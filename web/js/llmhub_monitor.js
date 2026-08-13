@@ -180,10 +180,10 @@ function createPanel(node) {
   root.className = "llmhub-monitor";
   root.innerHTML = `
     <div class="llmhub-head">
-      <span class="llmhub-status">대기 중</span>
+      <span class="llmhub-status">Idle</span>
       <span class="llmhub-meta"></span>
-      <button class="llmhub-copy" type="button" title="생성된 텍스트를 클립보드에 복사합니다">복사</button>
-      <button class="llmhub-stop" type="button" title="이 노드의 생성을 중지합니다">■ Stop</button>
+      <button class="llmhub-copy" type="button" title="Copy the generated text to the clipboard">Copy</button>
+      <button class="llmhub-stop" type="button" title="Stop generation on this node">■ Stop</button>
     </div>
     <div class="llmhub-body"></div>
   `;
@@ -205,18 +205,18 @@ function createPanel(node) {
     const text = control.lastText || "";
     // 빈 값을 쓰면 클립보드에 들어 있던 것이 조용히 지워진다.
     let label;
-    if (!text) label = "내용 없음";
-    else label = (await copyToClipboard(text)) ? "복사됨" : "복사 실패";
+    if (!text) label = "Nothing to copy";
+    else label = (await copyToClipboard(text)) ? "Copied" : "Copy failed";
 
     copyEl.textContent = label;
     clearTimeout(copyTimer);
     copyTimer = setTimeout(() => {
-      copyEl.textContent = "복사";
+      copyEl.textContent = "Copy";
     }, 1200);
   });
   stopEl.addEventListener("click", async () => {
     stopEl.disabled = true;
-    stopEl.textContent = "중지 중...";
+    stopEl.textContent = "Stopping…";
     try {
       await api.fetchApi("/llmhub/stop", {
         method: "POST",
@@ -225,7 +225,7 @@ function createPanel(node) {
       });
     } catch (error) {
       // 중지 요청이 실패해도 패널이 멈춘 것처럼 보이면 안 된다.
-      statusEl.textContent = "중지 요청 실패";
+      statusEl.textContent = "Stop request failed";
       stopEl.disabled = false;
       stopEl.textContent = "■ Stop";
     }
@@ -256,7 +256,7 @@ function createPanel(node) {
       if (stick) bodyEl.scrollTop = bodyEl.scrollHeight;
     },
     setStatus(status, elapsed, done) {
-      statusEl.textContent = status || (done ? "완료" : "생성 중...");
+      statusEl.textContent = status || (done ? "Done" : "Generating…");
       // 한 줄로 잘리므로, 잘린 내용은 마우스를 올려 볼 수 있게 남긴다.
       // (도구 사용 줄은 파일 경로가 길어서 거의 항상 잘린다.)
       statusEl.title = statusEl.textContent;
@@ -484,7 +484,9 @@ function toggleAdvanced(node) {
 //
 // 우클릭 메뉴는 그대로 남겨둔다. 프론트엔드 버전에 따라 onMouseDown 이 안 불릴
 // 가능성이 있는데, 그때 조작 수단이 통째로 사라지면 안 되기 때문이다.
-const BUTTON = { width: 58, height: 18, margin: 8 };
+// 폭은 라벨에 맞춰 잡는다. "▼ Advanced" 는 "▼ 고급" 보다 길어서 58 로는 글자가
+// 버튼 밖으로 삐져나온다(캔버스라 CSS 처럼 알아서 늘어나지 않는다).
+const BUTTON = { width: 78, height: 18, margin: 8 };
 const HOVER_KEY = "_llmhubBtnHover";
 
 function buttonRect(node) {
@@ -527,7 +529,7 @@ function drawAdvancedButton(node, ctx) {
   ctx.font = "11px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(shown ? "▲ 고급" : "▼ 고급", r.x + r.w / 2, r.y + r.h / 2);
+  ctx.fillText(shown ? "▲ Advanced" : "▼ Advanced", r.x + r.w / 2, r.y + r.h / 2);
   ctx.restore();
 }
 
@@ -542,7 +544,7 @@ app.registerExtension({
     // 이 줄이 F12 콘솔에 없으면 JS 가 아예 로드되지 않은 것이다.
     // (WEB_DIRECTORY 경로 문제로 실제로 겪었다 — 그때는 아무 흔적도 없었다.)
     console.log(
-      `[LLM Hub] v${VERSION} 모니터 확장 로드됨. 진단: /llmhub/health`
+      `[LLM Hub] v${VERSION} monitor extension loaded. Diagnostics: /llmhub/health`
     );
 
     api.addEventListener(EVENT_NAME, (event) => {
@@ -566,7 +568,7 @@ app.registerExtension({
         // 이게 없으면 생성 시간의 대부분을 빈 창으로 앉아 있게 된다
         // (실측: 델타 298개가 thinking, 3개가 본문).
         control.renderThinking(thinking);
-        control.setStatus("생각 중...", data.elapsed, false);
+        control.setStatus("Thinking…", data.elapsed, false);
       } else {
         control.lastText = body;
         control.render(body, mode);
@@ -581,7 +583,7 @@ app.registerExtension({
         const control = node[PANEL_KEY];
         if (control) {
           control.clear();
-          control.setStatus("대기 중", null, true);
+          control.setStatus("Idle", null, true);
         }
       }
     });
@@ -666,7 +668,7 @@ app.registerExtension({
       const result = getExtraMenuOptions?.apply(this, arguments);
       const shown = !!this.properties?.[SHOW_ADVANCED_PROP];
       options.push({
-        content: shown ? "고급 옵션 접기" : "고급 옵션 펼치기",
+        content: shown ? "Hide advanced options" : "Show advanced options",
         callback: () => toggleAdvanced(this),
       });
       return result;

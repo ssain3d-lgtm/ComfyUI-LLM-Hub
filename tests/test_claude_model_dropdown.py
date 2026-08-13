@@ -51,10 +51,18 @@ class TestClaudeModelDropdown(unittest.TestCase):
             [nodes_mod.AUTO_MODEL, "haiku", "opus", "sonnet", "fable"],
         )
 
-    def test_widget_exists_and_is_last(self):
-        """맨 뒤가 아니면 예전 워크플로우의 widgets_values 자리가 밀린다."""
+    def test_widget_keeps_its_position(self):
+        """앞으로 밀리면 예전 워크플로우의 widgets_values 자리가 어긋난다.
+
+        더 새 위젯이 뒤에 붙는 것은 괜찮다(그게 규칙이다). 막아야 하는 것은
+        claude_model 이 자기보다 먼저 있던 위젯들보다 앞으로 오는 것이다.
+        """
         optional = list(nodes_mod.LLMHubGenerate.INPUT_TYPES()["optional"])
-        self.assertEqual(optional[-1], "claude_model")
+        self.assertIn("claude_model", optional)
+        for earlier in ("extra_args", "lmstudio_model", "openai_base_url",
+                        "lmstudio_unload_after"):
+            self.assertLess(optional.index(earlier), optional.index("claude_model"),
+                            f"{earlier} 가 claude_model 뒤로 갔다")
 
     def test_dropdown_picks_the_model(self):
         self.assertEqual(_run(claude_model="haiku"), "haiku")

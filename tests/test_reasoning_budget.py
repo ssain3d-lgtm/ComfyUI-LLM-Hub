@@ -109,7 +109,7 @@ class TestMaxTokensRange(unittest.TestCase):
 
     def test_tooltip_warns_about_reasoning_tokens(self):
         """이 위젯을 작게 잡으면 빈 응답이 난다는 걸 여기서 알려야 한다."""
-        self.assertIn("추론", self.spec["tooltip"])
+        self.assertIn("Reasoning", self.spec["tooltip"])
 
 
 class TestReasoningBudget(unittest.TestCase):

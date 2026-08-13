@@ -415,7 +415,7 @@ class LMStudioBackend(BaseBackend):
                 )
                 notes.append(f"tool[{iteration}] {fname}({args.get('path','')}) -> {len(result)} chars")
                 if req.emitter is not None:
-                    req.emitter.set_status(f"도구 사용: {fname}({args.get('path', '')})")
+                    req.emitter.set_status(f"Tool: {fname}({args.get('path', '')})")
                 messages.append(
                     {
                         "role": "tool",

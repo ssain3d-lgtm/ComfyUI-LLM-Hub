@@ -297,7 +297,7 @@ def _on_stream_line(line: str, emitter, state) -> None:
         return
 
     if kind == "tool_use":
-        emitter.set_status(f"도구 사용: {event.get('tool_name', '?')}")
+        emitter.set_status(f"Tool: {event.get('tool_name', '?')}")
         return
     if kind == "init":
         emitter.set_status(f"모델 준비: {event.get('model', '')}")

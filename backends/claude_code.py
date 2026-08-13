@@ -309,7 +309,7 @@ def _on_stream_line(line: str, emitter) -> None:
     if kind == "assistant":
         for block in ((event.get("message") or {}).get("content") or []):
             if block.get("type") == "tool_use":
-                emitter.set_status(f"도구 사용: {block.get('name', '?')}")
+                emitter.set_status(f"Tool: {block.get('name', '?')}")
         return
 
     if kind == "system" and event.get("subtype") == "init":

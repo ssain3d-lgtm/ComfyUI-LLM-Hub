@@ -1,4 +1,7 @@
 config.json
+# 사용자가 손으로 고치는 프리셋 파일. 추적하면 git pull 이 사용자의 프리셋을
+# 덮어쓴다. 배포용 원본은 system_prompts.example.json 이다.
+system_prompts.json
 _llmhub_tmp/
 __pycache__/
 *.py[cod]
