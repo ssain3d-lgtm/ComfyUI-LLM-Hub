@@ -14,6 +14,9 @@ const EVENT_NAME = "llmhub.stream";
 // 파이썬만 새 버전이고 화면은 옛날인 상태가 된다. 그때 이 줄이 답을 준다.
 const VERSION = "1.1.0";
 
+// utils/presets.py 의 PRESET_NONE 과 같은 값이어야 한다.
+const PRESET_NONE = "(none)";
+
 // 패널은 노드 객체에 직접 붙인다.
 // onNodeCreated 시점에는 node.id 가 아직 -1 이라(그래프 추가 시 배정됨)
 // id 를 키로 Map 에 넣어두면 이벤트의 실제 id 와 영원히 매칭되지 않는다.
@@ -474,6 +477,220 @@ function toggleAdvanced(node) {
 }
 
 // --------------------------------------------------------------------------
+// 시스템 프롬프트 편집창
+// --------------------------------------------------------------------------
+// 노드 안의 입력칸은 너무 작아서 긴 프롬프트를 붙여넣으면 전체가 안 보인다.
+// 큰 창을 띄워 거기서 쓰고, 이름을 붙여 저장하고, 저장해둔 것을 불러온다.
+//
+// 저장은 서버(/llmhub/presets)가 한다. 브라우저 로컬에 두면 다른 기기나
+// 다른 브라우저에서 열었을 때 프리셋이 통째로 사라진다.
+
+function presetSelectOptions(select, presets, keep) {
+  select.innerHTML = "";
+  const names = Object.keys(presets);
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = names.length ? "— select a preset —" : "— no presets saved —";
+  select.appendChild(blank);
+  for (const name of names) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  }
+  select.value = names.includes(keep) ? keep : "";
+}
+
+function openPromptEditor(node) {
+  const promptWidget = node.widgets?.find((w) => w.name === "system_prompt");
+  if (!promptWidget) return;
+  const presetWidget = node.widgets?.find((w) => w.name === "system_preset");
+
+  let presets = {};
+
+  const overlay = document.createElement("div");
+  overlay.className = "llmhub-overlay";
+  overlay.innerHTML = `
+    <div class="llmhub-dialog">
+      <div class="llmhub-dialog-head">
+        <strong>System prompt</strong>
+        <button class="llmhub-x" type="button" title="Close without applying">✕</button>
+      </div>
+      <div class="llmhub-dialog-bar">
+        <select class="llmhub-preset-list"></select>
+        <button class="llmhub-load" type="button">Load</button>
+        <button class="llmhub-save" type="button">Save as…</button>
+        <button class="llmhub-del" type="button">Delete</button>
+        <span class="llmhub-dialog-msg"></span>
+      </div>
+      <textarea class="llmhub-editor" spellcheck="false"
+                placeholder="Write or paste the system prompt here."></textarea>
+      <div class="llmhub-dialog-foot">
+        <span class="llmhub-hint">Ctrl+Enter to apply · Esc to cancel</span>
+        <button class="llmhub-cancel" type="button">Cancel</button>
+        <button class="llmhub-apply" type="button">Apply</button>
+      </div>
+    </div>
+  `;
+
+  const dialog = overlay.querySelector(".llmhub-dialog");
+  const editor = overlay.querySelector(".llmhub-editor");
+  const list = overlay.querySelector(".llmhub-preset-list");
+  const msg = overlay.querySelector(".llmhub-dialog-msg");
+
+  editor.value = promptWidget.value || "";
+
+  const say = (text, bad) => {
+    msg.textContent = text || "";
+    msg.classList.toggle("llmhub-bad", !!bad);
+  };
+
+  const close = () => {
+    document.removeEventListener("keydown", onKey, true);
+    overlay.remove();
+  };
+
+  const apply = () => {
+    promptWidget.value = editor.value;
+    // 위젯 값을 직접 바꾸면 callback 이 안 불린다. 저장/캐시 무효화가 필요한
+    // 위젯은 아니지만, 화면은 다시 그려야 새 내용이 보인다.
+    promptWidget.callback?.(promptWidget.value);
+    node.setDirtyCanvas?.(true, true);
+    close();
+  };
+
+  function onKey(event) {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      close();
+    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.stopPropagation();
+      apply();
+    }
+  }
+
+  // ComfyUI 는 캔버스에서 Delete/Space 같은 키를 단축키로 먹는다. 편집창 안에서
+  // 타이핑한 것이 노드 삭제로 이어지면 안 되므로 여기서 끊는다.
+  for (const name of ["keydown", "keyup", "keypress", "pointerdown", "wheel"]) {
+    dialog.addEventListener(name, (event) => event.stopPropagation());
+  }
+  document.addEventListener("keydown", onKey, true);
+  overlay.addEventListener("pointerdown", (event) => {
+    if (event.target === overlay) close(); // 바깥을 누르면 닫는다(적용은 안 한다)
+  });
+
+  overlay.querySelector(".llmhub-x").addEventListener("click", close);
+  overlay.querySelector(".llmhub-cancel").addEventListener("click", close);
+  overlay.querySelector(".llmhub-apply").addEventListener("click", apply);
+
+  overlay.querySelector(".llmhub-load").addEventListener("click", () => {
+    const name = list.value;
+    if (!name) return say("Pick a preset to load.", true);
+    editor.value = presets[name] ?? "";
+    if (presetWidget) presetWidget.value = name;
+    say(`Loaded '${name}'.`);
+  });
+  // 목록에서 고르는 것만으로도 불러온다. 두 번 누르게 할 이유가 없다.
+  list.addEventListener("change", () => {
+    if (list.value) overlay.querySelector(".llmhub-load").click();
+  });
+
+  overlay.querySelector(".llmhub-save").addEventListener("click", async () => {
+    const suggested = list.value || "";
+    const name = window.prompt("Save this system prompt as:", suggested);
+    if (name === null) return; // 취소
+    say("Saving…");
+    try {
+      const response = await api.fetchApi("/llmhub/presets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, prompt: editor.value }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) return say(data.error || "Could not save.", true);
+      presets = data.presets || {};
+      presetSelectOptions(list, presets, name.trim());
+      refreshPresetWidget(node, presets, name.trim());
+      say(`Saved '${name.trim()}'.`);
+    } catch (error) {
+      say(`Could not save: ${error}`, true);
+    }
+  });
+
+  overlay.querySelector(".llmhub-del").addEventListener("click", async () => {
+    const name = list.value;
+    if (!name) return say("Pick a preset to delete.", true);
+    if (!window.confirm(`Delete the preset '${name}'?`)) return;
+    try {
+      const response = await api.fetchApi("/llmhub/presets/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) return say(data.error || "Could not delete.", true);
+      presets = data.presets || {};
+      presetSelectOptions(list, presets, "");
+      refreshPresetWidget(node, presets, PRESET_NONE);
+      say(`Deleted '${name}'.`);
+    } catch (error) {
+      say(`Could not delete: ${error}`, true);
+    }
+  });
+
+  document.body.appendChild(overlay);
+  editor.focus();
+
+  // 목록은 열릴 때 서버에서 받아온다. 노드가 만들어진 뒤에 저장한 프리셋도
+  // 브라우저를 새로고침하지 않고 바로 보이게 하려는 것이다.
+  api.fetchApi("/llmhub/presets")
+    .then((response) => response.json())
+    .then((data) => {
+      presets = data.presets || {};
+      presetSelectOptions(list, presets, presetWidget?.value);
+    })
+    .catch(() => say("Could not load the preset list.", true));
+}
+
+// 드롭다운에서 프리셋을 고르면 system_prompt 칸을 그 내용으로 바꾼다.
+// 편집창을 열지 않고 빠르게 갈아끼우는 용도다.
+function setupPresetLoader(node) {
+  const widget = node.widgets?.find((w) => w.name === "system_preset");
+  const promptWidget = node.widgets?.find((w) => w.name === "system_prompt");
+  if (!widget || !promptWidget) return;
+
+  const previous = widget.callback;
+  widget.callback = function (value) {
+    const result = previous?.apply(this, arguments);
+    if (!value || value === PRESET_NONE) return result;
+    // 본문은 서버에만 있다. 고를 때마다 받아오는 대신 캐시할 수도 있지만,
+    // 다른 창에서 프리셋을 고쳤을 때 낡은 내용을 넣는 것이 더 나쁘다.
+    api.fetchApi("/llmhub/presets")
+      .then((response) => response.json())
+      .then((data) => {
+        const text = (data.presets || {})[value];
+        if (typeof text !== "string") return;
+        promptWidget.value = text;
+        promptWidget.callback?.(text);
+        node.setDirtyCanvas?.(true, true);
+      })
+      .catch(() => {});
+    return result;
+  };
+}
+
+// 노드의 드롭다운 위젯 목록을 서버 목록과 맞춘다. 이게 없으면 편집창에서 저장한
+// 프리셋이 드롭다운에는 새로고침 전까지 안 보인다.
+function refreshPresetWidget(node, presets, select) {
+  const widget = node.widgets?.find((w) => w.name === "system_preset");
+  if (!widget) return;
+  const names = [PRESET_NONE, ...Object.keys(presets)];
+  if (widget.options) widget.options.values = names;
+  widget.value = names.includes(select) ? select : PRESET_NONE;
+  node.setDirtyCanvas?.(true, true);
+}
+
+// --------------------------------------------------------------------------
 // 고급 옵션 버튼 (타이틀 바 오른쪽)
 // --------------------------------------------------------------------------
 // 우클릭 메뉴는 있는 줄도 모른다. 그래서 눈에 보이는 버튼을 하나 그린다.
@@ -484,52 +701,77 @@ function toggleAdvanced(node) {
 //
 // 우클릭 메뉴는 그대로 남겨둔다. 프론트엔드 버전에 따라 onMouseDown 이 안 불릴
 // 가능성이 있는데, 그때 조작 수단이 통째로 사라지면 안 되기 때문이다.
-// 폭은 라벨에 맞춰 잡는다. "▼ Advanced" 는 "▼ 고급" 보다 길어서 58 로는 글자가
-// 버튼 밖으로 삐져나온다(캔버스라 CSS 처럼 알아서 늘어나지 않는다).
-const BUTTON = { width: 78, height: 18, margin: 8 };
+//
+// 폭은 라벨에 맞춰 직접 잡는다. 캔버스에 그리는 것이라 CSS 처럼 내용에 맞춰
+// 늘어나지 않는다 -- 좁게 잡으면 글자가 버튼 밖으로 삐져나온다.
+const BUTTON_HEIGHT = 18;
+const BUTTON_MARGIN = 8;
+const BUTTON_GAP = 6;
 const HOVER_KEY = "_llmhubBtnHover";
 
-function buttonRect(node) {
+// 오른쪽 끝부터 이 순서로 놓인다.
+const TITLE_BUTTONS = [
+  {
+    key: "advanced",
+    width: 78,
+    label: (node) =>
+      node.properties?.[SHOW_ADVANCED_PROP] ? "▲ Advanced" : "▼ Advanced",
+    active: (node) => !!node.properties?.[SHOW_ADVANCED_PROP],
+    onClick: (node) => toggleAdvanced(node),
+  },
+  {
+    key: "prompt",
+    width: 104,
+    label: () => "✎ System prompt",
+    active: () => false,
+    onClick: (node) => openPromptEditor(node),
+  },
+];
+
+function buttonRects(node) {
   const titleHeight = window.LiteGraph?.NODE_TITLE_HEIGHT ?? 30;
-  return {
-    x: (node.size?.[0] ?? 0) - BUTTON.width - BUTTON.margin,
-    // 타이틀 바는 노드 본문 기준 음수 y 영역이다(본문 위쪽).
-    y: -titleHeight + (titleHeight - BUTTON.height) / 2,
-    w: BUTTON.width,
-    h: BUTTON.height,
-  };
+  const y = -titleHeight + (titleHeight - BUTTON_HEIGHT) / 2;
+  let right = (node.size?.[0] ?? 0) - BUTTON_MARGIN;
+  return TITLE_BUTTONS.map((spec) => {
+    const rect = { spec, x: right - spec.width, y, w: spec.width, h: BUTTON_HEIGHT };
+    right -= spec.width + BUTTON_GAP;
+    return rect;
+  });
 }
 
-function insideButton(node, pos) {
-  if (node.flags?.collapsed) return false;
-  const r = buttonRect(node);
-  return (
-    pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.y && pos[1] <= r.y + r.h
-  );
+function hitButton(node, pos) {
+  if (node.flags?.collapsed) return null;
+  for (const r of buttonRects(node)) {
+    if (pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.y && pos[1] <= r.y + r.h) {
+      return r;
+    }
+  }
+  return null;
 }
 
-function drawAdvancedButton(node, ctx) {
+function drawTitleButtons(node, ctx) {
   if (node.flags?.collapsed) return;
-  const shown = !!node.properties?.[SHOW_ADVANCED_PROP];
-  const hover = !!node[HOVER_KEY];
-  const r = buttonRect(node);
+  const hovered = node[HOVER_KEY];
 
   ctx.save();
-  ctx.beginPath();
-  // roundRect 는 비교적 최근 API 라 없을 수 있다. 없으면 각진 사각형으로 떨어진다.
-  if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, 4);
-  else ctx.rect(r.x, r.y, r.w, r.h);
-  ctx.fillStyle = hover ? "#4b5563" : shown ? "#3b4351" : "#2c3038";
-  ctx.fill();
-  ctx.strokeStyle = hover ? "#8ab4f8" : "#5a6270";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.fillStyle = "#e8e8e8";
   ctx.font = "11px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(shown ? "▲ Advanced" : "▼ Advanced", r.x + r.w / 2, r.y + r.h / 2);
+  for (const r of buttonRects(node)) {
+    const hover = hovered === r.spec.key;
+    ctx.beginPath();
+    // roundRect 는 비교적 최근 API 라 없을 수 있다. 없으면 각진 사각형으로 떨어진다.
+    if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, 4);
+    else ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = hover ? "#4b5563" : r.spec.active(node) ? "#3b4351" : "#2c3038";
+    ctx.fill();
+    ctx.strokeStyle = hover ? "#8ab4f8" : "#5a6270";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = "#e8e8e8";
+    ctx.fillText(r.spec.label(node), r.x + r.w / 2, r.y + r.h / 2);
+  }
   ctx.restore();
 }
 
@@ -616,6 +858,11 @@ app.registerExtension({
       // backend 가 lmstudio 일 때만 lmstudio_* 위젯을 보인다(잡음 감소).
       setupBackendToggle(this);
 
+      // 드롭다운에서 프리셋을 고르면 system_prompt 칸을 그 내용으로 채운다.
+      // 이 위젯은 화면 전용이다 -- 생성 시점에 다시 합치면 같은 문장이 두 번
+      // 들어간다(그래서 파이썬 쪽은 이 값을 보지 않는다).
+      setupPresetLoader(this);
+
       this.size[1] = Math.max(this.size[1], 460);
       return result;
     };
@@ -624,7 +871,7 @@ app.registerExtension({
     const onDrawForeground = nodeType.prototype.onDrawForeground;
     nodeType.prototype.onDrawForeground = function (ctx) {
       const result = onDrawForeground?.apply(this, arguments);
-      drawAdvancedButton(this, ctx);
+      drawTitleButtons(this, ctx);
       return result;
     };
 
@@ -632,8 +879,9 @@ app.registerExtension({
     // 이게 없으면 버튼을 누를 때마다 노드가 딸려 움직인다.
     const onMouseDown = nodeType.prototype.onMouseDown;
     nodeType.prototype.onMouseDown = function (event, pos) {
-      if (insideButton(this, pos)) {
-        toggleAdvanced(this);
+      const hit = hitButton(this, pos);
+      if (hit) {
+        hit.spec.onClick(this);
         return true;
       }
       return onMouseDown?.apply(this, arguments);
@@ -642,9 +890,9 @@ app.registerExtension({
     // 마우스를 올리면 색이 바뀐다 — 이게 있어야 "눌리는 것" 으로 보인다.
     const onMouseMove = nodeType.prototype.onMouseMove;
     nodeType.prototype.onMouseMove = function (event, pos) {
-      const hover = insideButton(this, pos);
-      if (hover !== !!this[HOVER_KEY]) {
-        this[HOVER_KEY] = hover;
+      const key = hitButton(this, pos)?.spec.key ?? null;
+      if (key !== (this[HOVER_KEY] ?? null)) {
+        this[HOVER_KEY] = key;
         this.setDirtyCanvas?.(true, false);
       }
       return onMouseMove?.apply(this, arguments);
@@ -655,7 +903,7 @@ app.registerExtension({
     const onMouseLeave = nodeType.prototype.onMouseLeave;
     nodeType.prototype.onMouseLeave = function () {
       if (this[HOVER_KEY]) {
-        this[HOVER_KEY] = false;
+        this[HOVER_KEY] = null;
         this.setDirtyCanvas?.(true, false);
       }
       return onMouseLeave?.apply(this, arguments);
@@ -695,6 +943,60 @@ app.registerExtension({
 
 const style = document.createElement("style");
 style.textContent = `
+/* --- 시스템 프롬프트 편집창 --------------------------------------------- */
+/* z-index 를 높게 잡는다. ComfyUI 의 메뉴/사이드바보다 위에 떠야 한다. */
+.llmhub-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.llmhub-dialog {
+  display: flex; flex-direction: column; gap: 8px;
+  width: min(860px, 92vw); height: min(70vh, 720px);
+  padding: 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+  background: var(--comfy-menu-bg, #202020);
+  color: var(--input-text, #ddd);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.llmhub-dialog-head { display: flex; align-items: center; justify-content: space-between; }
+.llmhub-dialog-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.llmhub-dialog-bar select {
+  flex: 1 1 200px; min-width: 0;
+  padding: 3px 6px;
+  background: var(--comfy-input-bg, #222);
+  color: var(--input-text, #ddd);
+  border: 1px solid var(--border-color, #444);
+  border-radius: 4px;
+}
+.llmhub-dialog button, .llmhub-dialog-foot button {
+  flex: 0 0 auto; white-space: nowrap;
+  padding: 3px 10px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--border-color, #444); border-radius: 4px;
+  background: var(--comfy-input-bg, #222); color: var(--input-text, #ddd);
+}
+.llmhub-dialog button:hover { border-color: #8ab4f8; color: #8ab4f8; }
+.llmhub-apply { border-color: #4a7a4a !important; }
+.llmhub-apply:hover { border-color: #6ab86a !important; color: #9be89b !important; }
+.llmhub-del:hover { border-color: #c04040 !important; color: #ff8080 !important; }
+.llmhub-x { padding: 0 6px !important; }
+/* 편집창이 화면의 주인공이다. 남는 세로 공간을 전부 가져간다. */
+.llmhub-editor {
+  flex: 1 1 auto; min-height: 0; resize: none;
+  padding: 8px; box-sizing: border-box;
+  border: 1px solid var(--border-color, #444); border-radius: 4px;
+  background: var(--comfy-input-bg, #222); color: var(--input-text, #ddd);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px; line-height: 1.5;
+  white-space: pre-wrap;
+}
+.llmhub-dialog-foot { display: flex; align-items: center; gap: 6px; }
+.llmhub-hint { margin-right: auto; font-size: 11px; color: var(--descrip-text, #888); }
+.llmhub-dialog-msg { font-size: 11px; color: var(--descrip-text, #888); }
+.llmhub-dialog-msg.llmhub-bad { color: #ff8080; }
+
 /* 복사와 Stop 을 오른쪽 끝에 한 덩어리로 붙인다. Stop 은 생성 중에만 보이므로
    margin-left:auto 를 Stop 에 걸면 버튼 줄이 상태에 따라 좌우로 튄다. */
 .llmhub-copy { margin-left: auto; }

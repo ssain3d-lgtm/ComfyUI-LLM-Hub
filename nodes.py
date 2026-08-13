@@ -21,6 +21,36 @@ AUTO_MODEL = "(auto)"
 # 목록에 없는 모델은 위의 model 칸에 전체 이름을 직접 적으면 된다.
 CLAUDE_MODELS = [AUTO_MODEL, "haiku", "opus", "sonnet", "fable"]
 
+# 위젯이 화면에 놓이는 순서 = ComfyUI 가 widgets_values 배열에 값을 저장하는 순서.
+# 여기에 새 이름은 반드시 "맨 뒤에만" 붙인다.
+#
+# 이걸 명시적으로 적어두는 이유: openai_base_url 을 중간에 끼워 넣은 적이 있는데,
+# 그때 이전에 저장한 워크플로우의 값이 전부 한 칸씩 밀려 노드가 죽었다. INPUT_TYPES
+# 안에서는 순서가 "그냥 코드를 적은 자리" 로 보여서 눈에 안 띈다 -- 이름을 따로
+# 나열해두면 테스트가 어긋남을 잡아준다.
+#
+# IMAGE / VIDEO 는 링크 입력이라 위젯이 아니고 배열 자리도 차지하지 않는다.
+# control_after_generate 는 seed 옵션을 보고 프론트엔드가 만들어 붙이는 짝꿍이다.
+WIDGET_ORDER = [
+    "backend", "prompt", "system_prompt", "model", "file_access", "workspace_dir",
+    "temperature", "max_tokens", "timeout_sec", "seed", "control_after_generate",
+    "video_max_frames", "stream_view",
+    "video_path", "mcp_config", "extra_args",
+    "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
+    "openai_base_url", "system_preset",
+]
+
+
+def _as_text(value) -> str:
+    """위젯에서 온 값을 문자열로 안전하게 받는다.
+
+    widgets_values 는 위치로 읽히므로, 위젯 순서가 한 번이라도 어긋났던
+    워크플로우를 열면 엉뚱한 타입이 들어온다(실제로 bool 이 들어와 .strip()
+    에서 노드가 죽었다). 노드는 어떤 입력에도 예외를 던지지 않아야 하므로
+    (DESIGN N4) 문자열이 아니면 빈 값으로 본다.
+    """
+    return value.strip() if isinstance(value, str) else ""
+
 
 def _ls_default(key, fallback):
     """config.json 의 lmstudio 설정을 위젯 기본값으로 쓴다.
@@ -139,13 +169,6 @@ class LLMHubGenerate:
                     "min": 0, "max": 86400,
                     "tooltip": "[lmstudio only] Idle TTL in seconds. LM Studio unloads the "
                                "model from VRAM after this long with no request. 0 = off."}),
-                "openai_base_url": ("STRING", {
-                    "default": "",
-                    "tooltip": "Address of the OpenAI-compatible server. Empty = use "
-                               "openai_compat.base_url from config.json. "
-                               "Ollama http://127.0.0.1:11434 / "
-                               "vLLM http://127.0.0.1:8000 / "
-                               "llama.cpp http://127.0.0.1:8080"}),
                 "lmstudio_unload_after": ("BOOLEAN", {"default": _ls_default("unload_after", True),
                     "tooltip": "[lmstudio only] Unload from VRAM immediately after the "
                                "response (needs the lms CLI). Turn it off if you call this "
@@ -160,15 +183,28 @@ class LLMHubGenerate:
                                "bottleneck."}),
                 # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
                 #
+                # 이 위젯은 원래 lmstudio_ttl_sec 바로 뒤에 끼워 넣었었다. 그래서
+                # openai_compat 병합 이전에 저장한 워크플로우는 값이 한 칸씩 밀려
+                # openai_base_url 에 True 가, lmstudio_unload_after 에 "(auto)" 가
+                # 들어갔고, True.strip() 에서 노드가 통째로 죽었다(재현 확인).
+                # 예제 워크플로우 3개도 전부 그 상태였다.
+                # 규칙대로 맨 뒤로 옮긴다. 순서는 WIDGET_ORDER 로 고정한다.
+                "openai_base_url": ("STRING", {
+                    "default": "",
+                    "tooltip": "Address of the OpenAI-compatible server. Empty = use "
+                               "openai_compat.base_url from config.json. "
+                               "Ollama http://127.0.0.1:11434 / "
+                               "vLLM http://127.0.0.1:8000 / "
+                               "llama.cpp http://127.0.0.1:8080"}),
+                #
                 # system_prompt 바로 밑에 두는 편이 자연스럽지만 그렇게 못 한다.
                 # 위젯 순서가 곧 widgets_values 의 순서라, 중간에 끼우면 이 노드로
                 # 저장해둔 예전 워크플로우의 값이 전부 한 칸씩 밀린다.
                 "system_preset": (presets.preset_names(), {
-                    "tooltip": "Pick a saved system prompt from system_prompts.json. "
-                               "(none) = use only the system_prompt box above. When both "
-                               "are set the preset goes first and your text is appended, so "
-                               "you can add a one-off instruction on top of a preset. "
-                               "Edit the file, then refresh the browser to reload this list."}),
+                    "tooltip": "Load a saved system prompt. Picking one replaces the "
+                               "system_prompt box above with the saved text. Use the "
+                               "'System prompt' button on the node title bar to write, "
+                               "paste and save presets in a larger window."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -179,13 +215,13 @@ class LLMHubGenerate:
         """가변 목록인 두 입력만 검증을 건너뛴다(나머지는 정상 검증됨).
 
         lmstudio_model 은 LM Studio 를 조회해 만든 목록이라 서버가 꺼졌거나
-        모델이 언로드되면 줄어든다. system_preset 은 사용자가 손으로 고치는
-        파일에서 오므로 프리셋 이름을 바꾸거나 지우면 줄어든다.
+        모델이 언로드되면 줄어든다. system_preset 은 프리셋 파일에서 오므로
+        편집창에서 프리셋을 지우거나 이름을 바꾸면 줄어든다.
 
         그때 ComfyUI 기본 검증이 저장된 값을 거부해 워크플로우 실행 자체가
         실패한다 -- 해당 기능을 안 쓰는 경우까지 같이 죽는다.
-        → 이 둘만 통과시키고, 목록에 없는 값의 처리는 각자 담당 코드가 한다
-          (presets.resolve 는 무시하고 debug 에 이유를 남긴다).
+        → 이 둘만 통과시킨다. system_preset 은 화면 전용이라 목록에 없는 이름이
+          남아 있어도 생성에는 아무 영향이 없다.
 
         주의: **kwargs 로 받으면 ComfyUI 가 모든 입력의 검증을 통째로 건너뛴다.
         그래서 우회할 입력만 명시적으로 받아 범위를 좁힌다.
@@ -228,17 +264,15 @@ class LLMHubGenerate:
         # 노드가 영원히 즉시 중지된다.
         cancel.begin(unique_id)
         try:
-            workspace_dir = (workspace_dir or "").strip()
+            workspace_dir = _as_text(workspace_dir)
             image_paths = []
             video_paths = []
             media_notes = []
 
-            # 프리셋을 시스템 프롬프트에 반영한다. 이름이 목록에 없어도 실패로
-            # 만들지 않고 메모만 남긴다 -- 파일을 고치다 이름이 어긋났다고
-            # 워크플로우 전체가 안 도는 것은 과한 처벌이다.
-            system_prompt, preset_note = presets.resolve(system_preset, system_prompt)
-            if preset_note:
-                media_notes.append(preset_note)
+            # system_preset 은 화면 전용이다. 프리셋을 고르면 프론트엔드가 그
+            # 본문을 system_prompt 칸에 그대로 채워 넣으므로, 여기서 다시 합치면
+            # 같은 문장이 두 번 들어간다. 이 위젯의 값은 "마지막에 무엇을
+            # 불러왔는지" 를 워크플로우에 남기는 표시일 뿐이다.
 
             if image is not None:
                 try:
@@ -248,7 +282,7 @@ class LLMHubGenerate:
                 except Exception as exc:
                     media_notes.append(f"image: failed to save PNG - {type(exc).__name__}: {exc}")
 
-            if video is not None or (video_path or "").strip():
+            if video is not None or _as_text(video_path):
                 tmp_dir = image_io.get_tmp_dir(workspace_dir, bool(file_access))
                 resolved, note = video_io.resolve_video(video, video_path, tmp_dir)
                 if note:
@@ -264,7 +298,7 @@ class LLMHubGenerate:
             # 백엔드별 드롭다운에서 고른 모델이 있으면 그쪽이 우선한다.
             # 드롭다운은 그 백엔드에서만 본다 — claude 를 쓰는데 lmstudio_model 이
             # 남아 있다고 그걸 집어가면 안 된다.
-            chosen_model = (model or "").strip()
+            chosen_model = _as_text(model)
             if backend == "lmstudio" and lmstudio_model and lmstudio_model != AUTO_MODEL:
                 chosen_model = lmstudio_model
             elif backend == "claude" and claude_model and claude_model != AUTO_MODEL:
@@ -280,12 +314,12 @@ class LLMHubGenerate:
                 video_max_frames=int(video_max_frames),
                 workspace_dir=workspace_dir,
                 file_access=bool(file_access),
-                mcp_config=(mcp_config or "").strip(),
+                mcp_config=_as_text(mcp_config),
                 temperature=float(temperature),
                 max_tokens=int(max_tokens),
                 timeout_s=int(timeout_sec),
-                extra_args=(extra_args or "").strip(),
-                base_url_override=(openai_base_url or "").strip(),
+                extra_args=_as_text(extra_args),
+                base_url_override=_as_text(openai_base_url),
                 ttl_sec=int(lmstudio_ttl_sec),
                 unload_after=bool(lmstudio_unload_after),
                 emitter=emitter,

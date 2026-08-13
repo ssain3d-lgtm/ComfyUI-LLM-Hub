@@ -10,8 +10,8 @@
         40
       ],
       "size": [
-        460,
-        150
+        470,
+        170
       ],
       "flags": {},
       "order": 0,
@@ -22,7 +22,7 @@
         "text": ""
       },
       "widgets_values": [
-        "LM Studio 로컬 모델 + VRAM 자동 해제\n\nLM Studio 서버를 켜고 브라우저를 새로고침하면\nlmstudio_model 드롭다운에 모델 목록이 채워집니다.\n\n응답 직후 lms unload 로 VRAM 을 비웁니다.\n이미지 모델이 쓸 자리를 남기기 위한 기본값입니다."
+        "LM Studio + automatic VRAM release\n\nStart the LM Studio server, then refresh the browser to fill the\nlmstudio_model dropdown.\n\nlmstudio_unload_after runs 'lms unload' right after the response so the\nimage models get their VRAM back. lmstudio_ttl_sec is the fallback when\nthe lms CLI is not on PATH."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -32,11 +32,11 @@
       "type": "LLMHubGenerate",
       "pos": [
         40,
-        220
+        240
       ],
       "size": [
-        420,
-        560
+        430,
+        620
       ],
       "flags": {},
       "order": 1,
@@ -81,7 +81,7 @@
       },
       "widgets_values": [
         "lmstudio",
-        "안녕이라고만 답해",
+        "Say hello and nothing else.",
         "",
         "",
         false,
@@ -99,7 +99,9 @@
         "(auto)",
         300,
         true,
-        "(auto)"
+        "(auto)",
+        "",
+        "(none)"
       ]
     }
   ],

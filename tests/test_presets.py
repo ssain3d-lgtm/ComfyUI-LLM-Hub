@@ -118,54 +118,81 @@ class TestBadInput(unittest.TestCase):
             self.assertEqual(presets.preset_names(), ["(none)", "B"])
 
 
-class TestResolve(unittest.TestCase):
-    def test_none_uses_the_typed_prompt_only(self):
-        text, note = presets.resolve(presets.PRESET_NONE, "내가 쓴 것")
-        self.assertEqual(text, "내가 쓴 것")
-        self.assertEqual(note, "")
+class TestSaveAndDelete(unittest.TestCase):
+    """편집창이 쓰는 경로. 파일을 직접 고치는 것이 아니라 노드에서 저장한다."""
 
-    def test_preset_alone(self):
-        with _TempPresets({"presets": [{"name": "A", "prompt": "프리셋 본문"}]}):
-            text, note = presets.resolve("A", "")
-            self.assertEqual(text, "프리셋 본문")
-            self.assertIn("A", note)
+    def test_save_then_load(self):
+        with _TempPresets({"presets": []}):
+            presets.save_preset("내 프롬프트", "너는 번역가다.")
+            self.assertEqual(presets.load_presets()["내 프롬프트"], "너는 번역가다.")
 
-    def test_preset_first_then_typed(self):
-        """프리셋이 입력을 덮어쓰면 방금 타이핑한 것이 조용히 사라진다."""
-        with _TempPresets({"presets": [{"name": "A", "prompt": "기본 성격"}]}):
-            text, _ = presets.resolve("A", "이번만 짧게")
-            self.assertEqual(text, "기본 성격\n\n이번만 짧게")
+    def test_save_overwrites_the_same_name(self):
+        with _TempPresets({"presets": [{"name": "A", "prompt": "옛 내용"}]}):
+            presets.save_preset("A", "새 내용")
+            self.assertEqual(presets.load_presets(), {"A": "새 내용"})
 
-    def test_unknown_name_is_ignored_not_fatal(self):
-        """파일에서 프리셋 이름을 바꿨다고 워크플로우가 안 돌면 안 된다."""
+    def test_multiline_is_stored_as_lines(self):
+        """한 줄에 이스케이프를 잔뜩 박아두면 파일을 직접 열었을 때 읽을 수가 없다."""
+        with _TempPresets({"presets": []}):
+            presets.save_preset("A", "\uccab \uc904\n\ub458\uc9f8 \uc904")
+            with open(presets.PRESET_PATH, encoding="utf-8") as fh:
+                raw = json.load(fh)
+            self.assertEqual(raw["presets"][0]["prompt"], ["\uccab \uc904", "\ub458\uc9f8 \uc904"])
+            self.assertEqual(presets.load_presets()["A"], "\uccab \uc904\n\ub458\uc9f8 \uc904")
+
+    def test_other_keys_survive_a_save(self):
+        """사람이 파일에 적어둔 메모까지 날려버리면 안 된다."""
+        with _TempPresets({"_comment": "손대지 마", "presets": []}):
+            presets.save_preset("A", "가")
+            with open(presets.PRESET_PATH, encoding="utf-8") as fh:
+                raw = json.load(fh)
+            self.assertEqual(raw["_comment"], "손대지 마")
+
+    def test_empty_prompt_is_refused(self):
+        """빈 프리셋은 불러와도 아무 일이 없다. 나중에 알기보다 지금 거절한다."""
+        with _TempPresets({"presets": []}):
+            with self.assertRaises(presets.PresetError):
+                presets.save_preset("A", "   ")
+
+    def test_blank_name_is_refused(self):
+        with _TempPresets({"presets": []}):
+            with self.assertRaises(presets.PresetError):
+                presets.save_preset("  ", "가")
+
+    def test_reserved_name_is_refused(self):
+        """(none) 을 프리셋 이름으로 쓰면 드롭다운의 '안 씀' 항목을 가린다."""
+        with _TempPresets({"presets": []}):
+            with self.assertRaises(presets.PresetError):
+                presets.save_preset(presets.PRESET_NONE, "가")
+
+    def test_long_name_is_refused(self):
+        with _TempPresets({"presets": []}):
+            with self.assertRaises(presets.PresetError):
+                presets.save_preset("가" * (presets.MAX_NAME_LEN + 1), "나")
+
+    def test_delete_removes_only_that_one(self):
+        payload = {"presets": [{"name": "A", "prompt": "가"}, {"name": "B", "prompt": "나"}]}
+        with _TempPresets(payload):
+            remaining = presets.delete_preset("A")
+            self.assertEqual(remaining, {"B": "나"})
+            self.assertEqual(presets.load_presets(), {"B": "나"})
+
+    def test_delete_unknown_name_says_so(self):
+        """조용히 성공시키면 지워진 줄 알고 넘어간다."""
         with _TempPresets({"presets": [{"name": "A", "prompt": "가"}]}):
-            text, note = presets.resolve("사라진이름", "내가 쓴 것")
-            self.assertEqual(text, "내가 쓴 것")
-            self.assertIn("사라진이름", note)
+            with self.assertRaises(presets.PresetError):
+                presets.delete_preset("없는이름")
 
-    def test_empty_everything(self):
-        self.assertEqual(presets.resolve("", ""), ("", ""))
+    def test_save_leaves_no_temp_file_behind(self):
+        with _TempPresets({"presets": []}):
+            presets.save_preset("A", "가")
+            self.assertFalse(os.path.exists(presets.PRESET_PATH + ".tmp"))
 
 
-class TestNodeWiring(unittest.TestCase):
-    def test_widget_exists_and_is_last(self):
-        spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()
-        self.assertIn("system_preset", spec["optional"])
-        names = list(spec["optional"])
-        self.assertEqual(names[-1], "system_preset",
-                         "맨 뒤가 아니면 예전 워크플로우의 widgets_values 가 밀린다")
+class TestNodeIgnoresThePreset(unittest.TestCase):
+    """프리셋은 화면 전용이다. 생성 시점에 다시 합치면 문장이 두 번 들어간다."""
 
-    def test_dropdown_starts_with_none(self):
-        spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()
-        self.assertEqual(spec["optional"]["system_preset"][0][0], presets.PRESET_NONE)
-
-    def test_validate_inputs_lets_a_stale_preset_through(self):
-        """목록에서 사라진 이름 때문에 ComfyUI 검증이 실행을 막으면 안 된다."""
-        self.assertTrue(
-            nodes_mod.LLMHubGenerate.VALIDATE_INPUTS(system_preset="사라진이름")
-        )
-
-    def test_node_applies_the_preset(self):
+    def _run(self, **kwargs):
         captured = {}
 
         class Spy:
@@ -173,29 +200,23 @@ class TestNodeWiring(unittest.TestCase):
                 captured["system"] = req.system_prompt
                 return base.LLMResponse(text="x", status="ok")
 
-        with _TempPresets({"presets": [{"name": "A", "prompt": "프리셋 본문"}]}):
-            with mock.patch.object(nodes_mod, "get_backend", return_value=Spy()):
-                out = nodes_mod.LLMHubGenerate().generate(
-                    backend="claude", prompt="hi", system_prompt="덧붙임", model="",
-                    file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
-                    timeout_sec=10, stream_view="off", seed=0, system_preset="A",
-                )
-        self.assertEqual(captured["system"], "프리셋 본문\n\n덧붙임")
-        self.assertIn("preset", out["result"][2])
-
-    def test_old_workflows_without_the_widget_still_run(self):
-        """이 입력이 없던 시절에 저장한 워크플로우도 그대로 돌아야 한다."""
-        class Spy:
-            def generate(self, req):
-                return base.LLMResponse(text="x", status="ok")
-
         with mock.patch.object(nodes_mod, "get_backend", return_value=Spy()):
-            out = nodes_mod.LLMHubGenerate().generate(
-                backend="claude", prompt="hi", system_prompt="", model="",
+            nodes_mod.LLMHubGenerate().generate(
+                backend="claude", prompt="hi", model="",
                 file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
-                timeout_sec=10, stream_view="off", seed=0,
+                timeout_sec=10, stream_view="off", seed=0, **kwargs
             )
-        self.assertEqual(out["result"][1], "ok")
+        return captured["system"]
+
+    def test_system_prompt_is_passed_through_untouched(self):
+        with _TempPresets({"presets": [{"name": "A", "prompt": "프리셋 본문"}]}):
+            sent = self._run(system_prompt="화면에서 채워진 내용", system_preset="A")
+        self.assertEqual(sent, "화면에서 채워진 내용")
+
+    def test_stale_preset_name_changes_nothing(self):
+        with _TempPresets({"presets": []}):
+            sent = self._run(system_prompt="내 지시", system_preset="사라진이름")
+        self.assertEqual(sent, "내 지시")
 
 
 class TestShippedExample(unittest.TestCase):

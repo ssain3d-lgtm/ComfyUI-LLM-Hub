@@ -10,8 +10,8 @@
         40
       ],
       "size": [
-        460,
-        150
+        470,
+        170
       ],
       "flags": {},
       "order": 0,
@@ -22,7 +22,7 @@
         "text": ""
       },
       "widgets_values": [
-        "폴더 문서 읽기\n\nfile_access 를 켜고 workspace_dir 에 폴더 경로를 넣으세요.\n읽기 전용으로만 동작하며 폴더 밖은 접근하지 못합니다.\n\n주의: 폴더 안 파일 내용은 신뢰할 수 없는 입력입니다.\n필요한 폴더만 좁게 지정하세요."
+        "Read and summarize a folder\n\nSet workspace_dir to a real folder on your machine before running.\nfile_access is read-only: the model can read, never write.\n\nWarning: file contents are untrusted input. Point workspace_dir at the\nnarrowest folder that works."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -32,11 +32,11 @@
       "type": "LLMHubGenerate",
       "pos": [
         40,
-        220
+        240
       ],
       "size": [
-        420,
-        520
+        430,
+        620
       ],
       "flags": {},
       "order": 1,
@@ -81,11 +81,11 @@
       },
       "widgets_values": [
         "claude",
-        "이 폴더의 문서를 읽고 핵심을 5줄로 요약해라.",
+        "Summarize the documents in this folder. Lead with the conclusion.",
         "",
         "",
         true,
-        "C:/Users/내이름/Documents/작업폴더",
+        "C:/Users/YOUR_NAME/Documents/notes",
         0.7,
         2048,
         600,
@@ -99,7 +99,9 @@
         "(auto)",
         300,
         true,
-        "(auto)"
+        "haiku",
+        "",
+        "(none)"
       ]
     }
   ],

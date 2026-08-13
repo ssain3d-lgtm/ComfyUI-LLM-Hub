@@ -134,7 +134,7 @@ dropdown is LM Studio only.
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
 | `openai_base_url` | Address of the OpenAI-compatible server (`openai_compat` only) |
-| `system_preset` | Pick a saved system prompt from `system_prompts.json`. See below |
+| `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
 | `seed` | **The value itself is never used.** It exists so ComfyUI sees "input changed → run again" and skips the cache |
 | `image` *(optional)* | ComfyUI IMAGE |
 | `video` / `video_path` *(optional)* | ComfyUI VIDEO input, or a path to a video file |
@@ -165,40 +165,51 @@ success would let downstream nodes consume it as if it were complete. Even when
 `status` is not `ok`, the node returns an empty `text` and the reason instead of
 raising.
 
-## 3-1. System prompt presets
+## 3-1. The system prompt editor
 
-Keep the system prompts you reuse in **`system_prompts.json`** and pick one from the
-`system_preset` dropdown instead of retyping them.
+The input box on the node is small, so long prompts are hard to read and paste
+into. Click **`✎ System prompt`** on the node's title bar to open a full-size editor.
 
-The file is created from `system_prompts.example.json` on first run and is **not
-tracked by git**, so `git pull` never overwrites your edits. Seven presets ship as
-examples (SDXL / photoreal image prompts, negative prompts, summarizing, translation).
+```
+┌─ System prompt ───────────────────────────────── ✕ ┐
+│ [ my translator ▾ ] [Load] [Save as…] [Delete]      │
+│ ┌────────────────────────────────────────────────┐ │
+│ │ You are a translator.                          │ │
+│ │ Answer with the translation only.              │ │
+│ │                                                │ │
+│ └────────────────────────────────────────────────┘ │
+│ Ctrl+Enter to apply · Esc to cancel [Cancel][Apply] │
+└─────────────────────────────────────────────────────┘
+```
+
+- **Write or paste** the prompt in the large box, then **Apply** to put it back on the node.
+- **Save as…** stores the current text under a name of your choice. **Load** brings it back later, **Delete** removes it.
+- **Cancel**, **Esc** or clicking outside closes without changing the node.
+
+The `system_preset` dropdown at the bottom of the node does the same load without
+opening the editor: **picking a preset replaces the `system_prompt` box** with the
+saved text.
+
+**Where it is stored.** `system_prompts.json` next to the node pack, created from
+`system_prompts.example.json` on first run and **not tracked by git** — `git pull`
+never overwrites your presets. Saving is done by the server, not the browser, so
+presets are still there from another browser or machine.
+
+You can also edit the file by hand. `prompt` may be a string or a list of strings
+joined with newlines, and saving from the editor writes multi-line prompts as a list
+so the file stays readable:
 
 ```json
 {
   "presets": [
-    { "name": "Image prompt (SDXL)",
-      "prompt": [
-        "You write prompts for a text-to-image model.",
-        "Answer with the prompt only - no preamble, no explanation."
-      ] },
-    { "name": "Summarize", "prompt": "Lead with the conclusion, then bullets." }
+    { "name": "my translator",
+      "prompt": ["You are a translator.", "Answer with the translation only."] }
   ]
 }
 ```
 
-- `prompt` is a **string or a list of strings** joined with newlines — easier to hand-edit than one long line full of `\n`.
-- Order in the file is the order in the dropdown.
-- After editing, **refresh the browser** to reload the list (same as the LM Studio model dropdown).
-
-**Preset and `system_prompt` combine, they don't replace.** With both set, the preset
-goes first and your typed text is appended after a blank line — so a preset can be the
-base persona and the box a one-off instruction. Overwriting would silently discard what
-you just typed.
-
-A preset name that no longer exists (renamed or deleted in the file) is **ignored with a
-note in `debug`**, not treated as an error. Losing a whole workflow run over a renamed
-preset would be a harsh punishment for editing a text file.
+A broken file never stops the node from loading — the dropdown just falls back to
+`(none)` and the reason is printed to the ComfyUI console.
 
 > The dropdown sits at the **bottom** of the node rather than next to `system_prompt`.
 > Widget order is what ComfyUI saves values by, so inserting one in the middle would
@@ -418,7 +429,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**255 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**293 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -590,7 +601,7 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
 | `openai_base_url` | OpenAI 호환 서버 주소 (`openai_compat` 전용) |
-| `system_preset` | `system_prompts.json` 에 저장해둔 시스템 프롬프트를 고릅니다. 아래 참조 |
+| `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
 | `seed` | **값 자체는 쓰지 않습니다.** ComfyUI가 "입력이 바뀌었다 → 다시 실행"으로 인식하게 하는 캐시 무효화용입니다 |
 | `image` *(옵션)* | ComfyUI IMAGE |
 | `video` / `video_path` *(옵션)* | ComfyUI VIDEO 입력 또는 비디오 파일 경로 |
@@ -621,39 +632,50 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 
 ---
 
-## 3-1. 시스템 프롬프트 프리셋
+## 3-1. 시스템 프롬프트 편집창
 
-자주 쓰는 시스템 프롬프트를 **`system_prompts.json`** 에 적어두고 `system_preset`
-드롭다운에서 고릅니다. 매번 같은 문장을 다시 타이핑하지 않아도 됩니다.
+노드 안의 입력칸은 작아서 긴 프롬프트를 붙여넣으면 전체가 안 보입니다.
+노드 **제목 줄의 `✎ System prompt` 버튼**을 누르면 큰 편집창이 열립니다.
 
-파일은 첫 실행 때 `system_prompts.example.json` 을 복사해 만들어지고 **git 추적
-대상이 아닙니다.** `git pull` 이 여러분이 고친 프리셋을 덮어쓰지 않습니다.
-예제로 7개가 들어 있습니다(SDXL·실사 이미지 프롬프트, 네거티브, 요약, 번역).
+```
+┌─ System prompt ───────────────────────────────── ✕ ┐
+│ [ 내 번역기 ▾ ] [Load] [Save as…] [Delete]          │
+│ ┌────────────────────────────────────────────────┐ │
+│ │ 너는 번역가다.                                  │ │
+│ │ 번역문만 답하라.                                │ │
+│ │                                                │ │
+│ └────────────────────────────────────────────────┘ │
+│ Ctrl+Enter to apply · Esc to cancel [Cancel][Apply] │
+└─────────────────────────────────────────────────────┘
+```
+
+- 큰 칸에 **쓰거나 붙여넣고** **Apply** 를 누르면 노드에 반영됩니다.
+- **Save as…** 로 지금 내용을 이름 붙여 저장하고, **Load** 로 나중에 그대로 불러옵니다. **Delete** 로 지웁니다.
+- **Cancel** / **Esc** / 바깥 클릭은 노드를 건드리지 않고 닫습니다.
+
+노드 맨 아래 `system_preset` 드롭다운으로도 같은 불러오기를 할 수 있습니다.
+**프리셋을 고르면 `system_prompt` 칸이 저장된 내용으로 바뀝니다.**
+
+**어디에 저장되나.** 노드팩 폴더의 `system_prompts.json` 입니다. 첫 실행 때
+`system_prompts.example.json` 을 복사해 만들어지고 **git 추적 대상이 아니라서**
+`git pull` 이 여러분의 프리셋을 덮어쓰지 않습니다. 저장은 브라우저가 아니라
+서버가 하므로 다른 브라우저나 다른 기기에서 열어도 그대로 있습니다.
+
+파일을 직접 고쳐도 됩니다. `prompt` 는 문자열이거나 문자열 목록(줄바꿈으로 이음)이고,
+편집창에서 저장할 때도 여러 줄이면 목록으로 씁니다 — 나중에 파일을 열어봤을 때
+읽을 수 있게 하려는 것입니다:
 
 ```json
 {
   "presets": [
-    { "name": "Image prompt (SDXL)",
-      "prompt": [
-        "You write prompts for a text-to-image model.",
-        "Answer with the prompt only - no preamble, no explanation."
-      ] },
-    { "name": "요약", "prompt": "결론부터 쓰고, 근거는 불릿으로." }
+    { "name": "내 번역기",
+      "prompt": ["너는 번역가다.", "번역문만 답하라."] }
   ]
 }
 ```
 
-- `prompt` 는 **문자열이거나 문자열 목록**입니다. 목록이면 줄바꿈으로 이어집니다 — 한 줄에 `\n` 을 잔뜩 박는 것보다 손으로 고치기 훨씬 낫습니다.
-- 파일에 적은 순서가 드롭다운 순서입니다.
-- 고친 뒤에는 **브라우저를 새로고침**해야 목록이 갱신됩니다 (LM Studio 모델 드롭다운과 같습니다).
-
-**프리셋과 `system_prompt` 는 합쳐집니다. 덮어쓰지 않습니다.** 둘 다 있으면 프리셋이
-앞, 직접 쓴 내용이 빈 줄 뒤에 붙습니다 — 프리셋을 기본 성격으로, 입력칸을 이번
-실행만의 지시로 쓸 수 있습니다. 덮어쓰면 방금 타이핑한 것이 조용히 사라집니다.
-
-목록에 없는 프리셋 이름(파일에서 이름을 바꿨거나 지운 경우)은 **무시하고 `debug` 에
-이유를 남깁니다.** 오류로 처리하지 않습니다 — 텍스트 파일 좀 고쳤다고 워크플로우
-전체가 안 도는 건 과한 처벌입니다.
+파일이 깨져도 노드는 정상적으로 뜹니다. 드롭다운만 `(none)` 이 되고 이유가
+ComfyUI 콘솔에 찍힙니다.
 
 > 드롭다운이 `system_prompt` 옆이 아니라 노드 **맨 아래**에 있습니다. ComfyUI 는
 > 위젯 순서로 값을 저장하기 때문에, 중간에 끼워 넣으면 이미 저장해둔 워크플로우의
@@ -872,7 +894,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**255종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**293종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 

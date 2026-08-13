@@ -161,7 +161,7 @@ class TestAdvancedButton(unittest.TestCase):
         """onMouseDown 이 true 를 안 돌려주면 버튼을 누를 때 노드가 딸려 움직인다."""
         body = self.javascript.split("nodeType.prototype.onMouseDown = function", 1)[1]
         body = body.split("\n    };", 1)[0]
-        self.assertIn("insideButton", body)
+        self.assertIn("hitButton", body)
         self.assertIn("return true", body)
 
     def test_right_click_menu_survives_as_a_fallback(self):
@@ -173,21 +173,38 @@ class TestAdvancedButton(unittest.TestCase):
         self.assertIn("Hide advanced options", self.javascript)
 
     def test_both_paths_share_one_toggle(self):
-        """버튼과 메뉴가 각자 상태를 뒤집으면 한쪽이 어긋난다."""
+        """버튼과 메뉴가 각자 상태를 뒤집으면 한쪽이 어긋난다.
+
+        호출 횟수를 세는 대신 "상태를 뒤집는 곳" 을 센다. 그게 진짜 지켜야 할
+        규칙이고, 호출 방식을 바꿔도 이 테스트는 계속 유효하다.
+        """
         self.assertEqual(self.javascript.count("function toggleAdvanced"), 1)
-        self.assertEqual(self.javascript.count("toggleAdvanced(this)"), 2)
+        # 기본값 초기화 1곳 + toggleAdvanced 안 1곳. 그 외에서 직접 뒤집으면 안 된다.
+        # `=` 뒤에 `=` 가 오면 비교문(=== undefined)이지 대입이 아니다.
+        writes = re.findall(
+            r"properties\[SHOW_ADVANCED_PROP\]\s*=(?!=)", self.code
+        )
+        self.assertEqual(len(writes), 2, "고급 상태를 직접 바꾸는 곳이 늘었다")
+        # 두 진입점이 모두 살아 있어야 한다
+        self.assertIn("toggleAdvanced(node)", self.javascript)   # 타이틀 바 버튼
+        self.assertIn("toggleAdvanced(this)", self.javascript)   # 우클릭 메뉴
 
     def test_hover_is_cleared_on_leave(self):
         """노드 밖으로 나가면 onMouseMove 가 안 불린다. 안 꺼주면 강조된 채 굳는다."""
         self.assertIn("onMouseLeave", self.javascript)
         after = self.javascript.split("nodeType.prototype.onMouseLeave", 1)[1]
-        self.assertIn("= false", after.split("\n    };", 1)[0])
+        self.assertIn("= null", after.split("\n    };", 1)[0])
 
     def test_button_hides_when_the_node_is_collapsed(self):
         """접힌 노드는 본문이 없다. 계속 그리면 타이틀 위에 유령이 남는다."""
-        for func in ("function drawAdvancedButton", "function insideButton"):
+        for func in ("function drawTitleButtons", "function hitButton"):
             body = self.javascript.split(func, 1)[1].split("\n}", 1)[0]
             self.assertIn("flags?.collapsed", body, f"{func}: 접힘 검사가 없다")
+
+    def test_buttons_do_not_overlap(self):
+        """오른쪽 끝부터 폭+간격만큼 물러나며 놓아야 겹치지 않는다."""
+        body = self.javascript.split("function buttonRects", 1)[1].split("\n}", 1)[0]
+        self.assertIn("right -= spec.width + BUTTON_GAP", body)
 
 
 class TestMonitorPanel(unittest.TestCase):

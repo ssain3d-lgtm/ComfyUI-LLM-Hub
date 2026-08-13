@@ -13,6 +13,8 @@ from .utils import cancel
 
 ROUTE = "/llmhub/stop"
 HEALTH_ROUTE = "/llmhub/health"
+PRESET_ROUTE = "/llmhub/presets"
+PRESET_DELETE_ROUTE = "/llmhub/presets/delete"
 
 
 def register() -> bool:
@@ -62,5 +64,52 @@ def register() -> bool:
             content_type="text/plain",
             charset="utf-8",
         )
+
+    # --- 시스템 프롬프트 프리셋 -------------------------------------------
+    # 편집창이 목록을 받아오고, 지금 쓴 프롬프트를 이름 붙여 저장한다.
+    # 응답은 항상 전체 목록을 함께 돌려준다 -- 저장/삭제 직후 프론트엔드가
+    # 다시 조회하지 않아도 되고, 두 쪽 목록이 어긋날 일도 없다.
+
+    from .utils import presets as _presets
+
+    def _presets_payload():
+        return {"ok": True, "presets": _presets.load_presets()}
+
+    @instance.routes.get(PRESET_ROUTE)
+    async def _presets_list(_request):
+        return web.json_response(_presets_payload())
+
+    @instance.routes.post(PRESET_ROUTE)
+    async def _presets_save(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        try:
+            saved = _presets.save_preset(payload.get("name"), payload.get("prompt"))
+        except _presets.PresetError as exc:
+            # 사용자가 읽을 메시지다. 400 으로 내려 편집창이 그대로 보여준다.
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response(
+                {"ok": False, "error": f"could not save the preset: {exc!r}"}, status=500
+            )
+        return web.json_response({"ok": True, "presets": saved})
+
+    @instance.routes.post(PRESET_DELETE_ROUTE)
+    async def _presets_delete(request):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        try:
+            remaining = _presets.delete_preset(payload.get("name"))
+        except _presets.PresetError as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response(
+                {"ok": False, "error": f"could not delete the preset: {exc!r}"}, status=500
+            )
+        return web.json_response({"ok": True, "presets": remaining})
 
     return True
