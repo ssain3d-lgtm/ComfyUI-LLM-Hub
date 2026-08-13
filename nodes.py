@@ -43,6 +43,11 @@ class LLMHubGenerate:
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("text", "status", "debug")
     FUNCTION = "generate"
+    # 결과를 노드에 남기면서 동시에 아래로 흘려보낸다.
+    # 모니터 창(웹소켓)은 실행 중에만 보이는 휘발성이라, 워크플로우를 다시 열면
+    # 아무것도 남지 않는다. OUTPUT_NODE + {"ui": ...} 는 저장되는 쪽이다.
+    # 둘은 대체재가 아니라 보완재다 -- 라이브는 모니터가, 보존은 이쪽이 맡는다.
+    OUTPUT_NODE = True
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -117,6 +122,13 @@ class LLMHubGenerate:
                 "lmstudio_ttl_sec": ("INT", {"default": _ls_default("ttl_sec", 300),
                     "min": 0, "max": 86400,
                     "tooltip": "[lmstudio 전용] 유휴 TTL(초). 이 시간 요청이 없으면 VRAM 에서 내림. 0=끔."}),
+                "openai_base_url": ("STRING", {
+                    "default": "",
+                    "tooltip": "OpenAI 호환 서버 주소. 비우면 config.json 의 "
+                               "openai_compat.base_url 을 씁니다. "
+                               "Ollama http://127.0.0.1:11434 / "
+                               "vLLM http://127.0.0.1:8000 / "
+                               "llama.cpp http://127.0.0.1:8080"}),
                 "lmstudio_unload_after": ("BOOLEAN", {"default": _ls_default("unload_after", True),
                     "tooltip": "[lmstudio 전용] 응답 직후 즉시 VRAM 해제(lms CLI 필요). "
                                "반복 호출이 잦으면 꺼서 재로드를 피할 수 있다."}),
@@ -166,6 +178,7 @@ class LLMHubGenerate:
         lmstudio_model=AUTO_MODEL,
         lmstudio_ttl_sec=300,
         lmstudio_unload_after=True,
+        openai_base_url="",
         claude_model=AUTO_MODEL,
         image=None,
         video=None,
@@ -230,12 +243,17 @@ class LLMHubGenerate:
                 max_tokens=int(max_tokens),
                 timeout_s=int(timeout_sec),
                 extra_args=(extra_args or "").strip(),
+                base_url_override=(openai_base_url or "").strip(),
                 ttl_sec=int(lmstudio_ttl_sec),
                 unload_after=bool(lmstudio_unload_after),
                 emitter=emitter,
             )
 
-            response = get_backend(backend).generate(req)
+            impl = get_backend(backend)
+            # openai_compat 만 노드에서 주소를 갈아탈 수 있다.
+            if hasattr(impl, "apply_base_url"):
+                impl.apply_base_url(req.base_url_override)
+            response = impl.generate(req)
 
             # 백엔드마다 중지가 다른 모양으로 끝난다(SSE 중단 / 프로세스 사망 →
             # "종료 코드 -1" 등). 사용자가 누른 것은 오류가 아니므로 여기 한 곳에서
@@ -254,11 +272,14 @@ class LLMHubGenerate:
             if response.raw_debug:
                 debug_parts.append(response.raw_debug)
 
-            return (
-                response.text or "",
-                response.status,
-                truncate_debug("\n".join(p for p in debug_parts if p)),
-            )
+            text_out = response.text or ""
+            debug_out = truncate_debug("\n".join(p for p in debug_parts if p))
+            return {
+                # ui 는 노드에 표시되고 워크플로우에 저장된다.
+                "ui": {"text": [text_out], "llmhub_status": [response.status]},
+                # result 는 그대로 아래 노드로 흐른다(터미널 노드가 되지 않게).
+                "result": (text_out, response.status, debug_out),
+            }
 
         except Exception as exc:
             # 실패해도 모니터링 창이 "생성 중..." 으로 멈춰 있지 않게 마무리한다.
@@ -267,11 +288,11 @@ class LLMHubGenerate:
                     emitter.finish(status=f"error: {type(exc).__name__}")
                 except Exception:
                     pass
-            return (
-                "",
-                f"error: 노드 내부 오류 — {type(exc).__name__}: {exc}",
-                truncate_debug(traceback.format_exc()),
-            )
+            status_out = f"error: 노드 내부 오류 — {type(exc).__name__}: {exc}"
+            return {
+                "ui": {"text": [""], "llmhub_status": [status_out]},
+                "result": ("", status_out, truncate_debug(traceback.format_exc())),
+            }
 
 
 NODE_CLASS_MAPPINGS = {"LLMHubGenerate": LLMHubGenerate}

@@ -1,10 +1,13 @@
 # ComfyUI-LLM-Hub
 
+<img src="example_workflows/icon.png" width="96" align="right" alt="">
+
+
 ComfyUI에서 LLM 백엔드를 드롭다운으로 골라 텍스트를 생성하는 커스텀 노드팩입니다.
 로컬 모델(LM Studio)과 이미 쓰고 있는 구독 CLI(Claude Code / Codex / Gemini)를
 같은 노드 하나로 바꿔가며 쓸 수 있습니다.
 
-- **4개 백엔드**: `lmstudio` / `claude` / `codex` / `gemini`
+- **5개 백엔드**: `lmstudio` / `claude` / `codex` / `gemini` / `openai_compat`(Ollama·vLLM·llama.cpp)
 - **파일 접근**: 지정한 폴더 안의 파일을 LLM이 읽고 답할 수 있음
 - **이미지 · 비디오 입력**: 멀티모달 프롬프트 지원
 - **실시간 모니터링 창**: 생성 중인 텍스트를 노드 안에서 바로 확인 (plain / markdown)
@@ -46,6 +49,20 @@ pip 의존성은 **`requests` 하나**입니다.
 
 ---
 
+### 예제 워크플로우
+
+설치하면 ComfyUI 메뉴의 **Workflow → Browse Templates** 에서 이 팩의 예제를 바로 열 수 있습니다.
+(`example_workflows/` 폴더가 자동으로 인식됩니다.)
+
+| 예제 | 내용 |
+|---|---|
+| `01_image_prompt` | 이미지 프롬프트 생성 — `text` 를 CLIP Text Encode 로 연결 |
+| `02_read_folder` | 지정 폴더의 문서를 읽고 요약 (`file_access`) |
+| `03_lmstudio_vram` | LM Studio 로컬 모델 + 응답 직후 VRAM 자동 해제 |
+
+각 예제에는 무엇을 준비해야 하는지 적은 메모 노드가 함께 들어 있습니다.
+폴더 경로처럼 환경마다 다른 값은 예시로 채워져 있으니 본인 경로로 바꿔 쓰세요.
+
 ## 2. 백엔드별 사전 준비
 
 | 백엔드 | 준비물 | 확인 방법 |
@@ -54,10 +71,36 @@ pip 의존성은 **`requests` 하나**입니다.
 | `claude` | Claude Code 설치 + Pro/Max 로그인 | 터미널에서 `claude` 실행 → 로그인 상태 확인 |
 | `codex` | Codex CLI 설치 + ChatGPT 로그인 | `codex login` |
 | `gemini` | Gemini CLI 설치 + 구글 계정 로그인 | `gemini` 실행 후 로그인 |
+| `openai_compat` | OpenAI 호환 서버 실행 (Ollama·vLLM·llama.cpp 등) | 아래 §2-1 참조 |
 
 - 파일 접근(`file_access`)을 쓰려면 LM Studio에서 **tool use를 지원하는 모델**(Qwen 계열 권장)을 로드하세요.
 - 이미지/비디오를 쓰려면 LM Studio에서 **VLM(비전) 모델**을 로드해야 합니다.
 - CLI가 PATH에 없으면 `config.json`의 `cli_paths`에 절대경로를 적으면 됩니다.
+
+### 2-1. OpenAI 호환 서버 (Ollama / vLLM / llama.cpp)
+
+Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제공합니다.
+`openai_compat` 백엔드는 **LM Studio 와 똑같은 코드 경로**를 쓰고 주소만 바꿉니다.
+
+`openai_base_url` 칸에 주소를 넣으세요 (비우면 `config.json` 의 `openai_compat.base_url`).
+
+| 서버 | 주소 | 비고 |
+|---|---|---|
+| Ollama | `http://127.0.0.1:11434` | `ollama serve` |
+| vLLM | `http://127.0.0.1:8000` | `vllm serve <모델>` |
+| llama.cpp | `http://127.0.0.1:8080` | `llama-server -m <모델>` |
+
+모델 이름은 위쪽 `model` 칸에 직접 적습니다 (예: `qwen3:8b`). 드롭다운은 LM Studio 전용입니다.
+
+**LM Studio 와 다른 점:**
+
+- `ttl` 을 보내지 않습니다. LM Studio 전용 필드라 다른 서버는 400 을 낼 수 있습니다
+- **VRAM 자동 해제가 없습니다.** Ollama 는 `ollama stop <모델>`, vLLM·llama.cpp 는 서버를 내려야 합니다
+- API 키가 필요하면 `config.json` 의 `openai_compat.api_token` 이나 환경변수 `OPENAI_COMPAT_API_KEY` 를 쓰세요. **LM Studio 토큰은 재사용하지 않습니다** (남의 서버에 토큰이 새면 안 되니까요)
+
+> ⚠️ **이 백엔드는 실기기 검증을 하지 못했습니다.**
+> LM Studio 로 검증된 코드 경로를 그대로 쓰지만, 서버마다 다른 부분(SSE 청크 모양,
+> 오류 응답 형식)은 실측 없이 확인할 수 없습니다. 문제가 있으면 `debug` 출력과 함께 알려주세요.
 
 ---
 
@@ -78,6 +121,7 @@ pip 의존성은 **`requests` 하나**입니다.
 | `lmstudio_model` | LM Studio 모델 드롭다운. `(auto)`면 `model` 칸/설정을 따름 |
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
+| `openai_base_url` | OpenAI 호환 서버 주소 (`openai_compat` 전용) |
 | `seed` | **값 자체는 쓰지 않습니다.** ComfyUI가 "입력이 바뀌었다 → 다시 실행"으로 인식하게 하는 캐시 무효화용입니다 |
 | `image` *(옵션)* | ComfyUI IMAGE |
 | `video` / `video_path` *(옵션)* | ComfyUI VIDEO 입력 또는 비디오 파일 경로 |

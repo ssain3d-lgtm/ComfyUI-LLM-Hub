@@ -495,8 +495,8 @@ class TestReviewFixes(unittest.TestCase):
                 file_access=False, workspace_dir="", temperature=0.7,
                 max_tokens=64, timeout_sec=10, seed=0, stream_view="plain",
             )
-        self.assertEqual(len(result), 3)
-        self.assertTrue(result[1].startswith("error:"))
+        self.assertEqual(len(result["result"]), 3)
+        self.assertTrue(result["result"][1].startswith("error:"))
         self.assertIn("status", finished)
 
     def test_new_widgets_are_appended_last(self):

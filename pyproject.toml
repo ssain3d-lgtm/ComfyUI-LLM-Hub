@@ -11,8 +11,9 @@ readme = "README.md"
 Repository = "https://github.com/ssain3d-lgtm/ComfyUI-LLM-Hub"
 
 [tool.comfy]
-# PublisherId 는 계정마다 다릅니다. Comfy Registry 에 로그인해
-# https://registry.comfy.org 에서 확인한 값을 넣으세요. 비워 두면 publish 가 거부됩니다.
-PublisherId = ""
+# PublisherId 는 Comfy Registry 의 핸들(@ 뒤 문자열)입니다. 보통 GitHub 사용자명과
+# 같지만 다를 수 있으니 https://registry.comfy.org 에 로그인해 확인하세요.
+# 값이 틀리면 `comfy node publish` 가 거부됩니다.
+PublisherId = "ssain3d-lgtm"
 DisplayName = "ComfyUI-LLM-Hub"
-Icon = ""
+Icon = "https://raw.githubusercontent.com/ssain3d-lgtm/ComfyUI-LLM-Hub/main/example_workflows/icon.png"

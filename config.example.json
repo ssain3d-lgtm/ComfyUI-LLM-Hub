@@ -6,6 +6,11 @@
     "ttl_sec": 300,
     "unload_after": true
   },
+  "openai_compat": {
+    "base_url": "http://127.0.0.1:11434",
+    "api_token": "",
+    "default_model": ""
+  },
   "cli_paths": {
     "claude": "claude",
     "codex": "codex",

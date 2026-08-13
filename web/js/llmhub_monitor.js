@@ -269,14 +269,15 @@ function viewMode(node) {
 // 숨겨도 값은 그대로 직렬화된다(litegraph 는 위젯을 저장할 때 type 을 보지 않는다).
 // 그래서 required 위젯을 숨겨도 프롬프트에서 빠지지 않는다.
 const BACKEND_ONLY = {
+  openai_base_url: ["openai_compat"],
   claude_model: ["claude"],
   lmstudio_model: ["lmstudio"],
   lmstudio_ttl_sec: ["lmstudio"],
   lmstudio_unload_after: ["lmstudio"],
-  temperature: ["lmstudio"],
-  max_tokens: ["lmstudio"],
+  temperature: ["lmstudio", "openai_compat"],
+  max_tokens: ["lmstudio", "openai_compat"],
   mcp_config: ["claude"],
-  video_max_frames: ["lmstudio", "claude", "codex"],
+  video_max_frames: ["lmstudio", "claude", "codex", "openai_compat"],
 };
 
 // 접었을 때 숨는 위젯. 여기 없는 것 = 항상 보이는 것이다:

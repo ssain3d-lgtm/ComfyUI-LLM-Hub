@@ -304,7 +304,13 @@ class TestNodeContract(unittest.TestCase):
     def test_input_types_shape(self):
         spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()
         required = spec["required"]
-        self.assertEqual(required["backend"][0], ["lmstudio", "claude", "codex", "gemini"])
+        # 목록을 하드코딩하면 백엔드가 늘 때마다 깨진다. 팩토리와 대조한다.
+        backends_mod = importlib.import_module(f"{_PACK_NAME}.backends")
+        self.assertEqual(required["backend"][0], backends_mod.BACKEND_NAMES)
+        # 기존 넷은 항상 있어야 한다(순서 포함 — 저장된 워크플로우가 인덱스를 쓴다)
+        self.assertEqual(
+            required["backend"][0][:4], ["lmstudio", "claude", "codex", "gemini"]
+        )
         for key in (
             "prompt", "system_prompt", "model", "file_access", "workspace_dir",
             "temperature", "max_tokens", "timeout_sec", "seed",
@@ -320,14 +326,18 @@ class TestNodeContract(unittest.TestCase):
 
     def test_returns_three_outputs_on_bad_backend(self):
         node = nodes_mod.LLMHubGenerate()
-        result = node.generate(
+        out = node.generate(
             backend="nope", prompt="hi", system_prompt="", model="",
             file_access=False, workspace_dir="", temperature=0.7,
             max_tokens=128, timeout_sec=10, seed=0,
         )
+        # OUTPUT_NODE 라 {"ui": ..., "result": (...)} 를 돌려준다.
+        result = out["result"]
         self.assertEqual(len(result), 3)
         self.assertEqual(result[0], "")
         self.assertTrue(result[1].startswith("error:"))
+        # ui 에도 같은 내용이 담겨 워크플로우에 저장된다
+        self.assertEqual(out["ui"]["text"], [""])
 
     def test_returns_three_outputs_on_bad_workspace(self):
         node = nodes_mod.LLMHubGenerate()
@@ -335,7 +345,7 @@ class TestNodeContract(unittest.TestCase):
             backend="lmstudio", prompt="hi", system_prompt="", model="",
             file_access=True, workspace_dir="", temperature=0.7,
             max_tokens=128, timeout_sec=10, seed=0,
-        )
+        )["result"]
         self.assertEqual(len(result), 3)
         self.assertIn("workspace_dir 확인 필요", result[1])
 
