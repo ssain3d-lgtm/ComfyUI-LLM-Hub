@@ -74,8 +74,8 @@ class OpenAICompatBackend(LMStudioBackend):
 
     def unload_model(self, model_id: str) -> str:
         return (
-            "unload: 이 백엔드에는 즉시 언로드가 없습니다. "
-            "Ollama 는 `ollama stop <모델>`, vLLM/llama.cpp 는 서버를 내려야 합니다."
+            "unload: this backend has no immediate unload. "
+            "Use `ollama stop <model>`, or shut down the vLLM / llama.cpp server."
         )
 
     def _map_exception(self, exc: Exception, started: float, debug_notes: list) -> LLMResponse:
@@ -85,8 +85,8 @@ class OpenAICompatBackend(LMStudioBackend):
         if isinstance(exc, requests.ConnectionError):
             return LLMResponse(
                 status=(
-                    f"error: 서버 응답 없음 ({self.base_url}). "
-                    "주소와 서버 실행 여부를 확인하세요 "
+                    f"error: no response from the server ({self.base_url}). "
+                    "Check the address and that the server is running "
                     "(Ollama 11434 / vLLM 8000 / llama.cpp 8080)"
                 ),
                 duration_s=duration,

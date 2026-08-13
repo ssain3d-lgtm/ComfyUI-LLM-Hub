@@ -24,7 +24,7 @@ _HTTP_TIMEOUT_S = 2.0
 # 진단 대상 CLI. 전부 optional 이다.
 #
 # 처음에는 claude/codex/gemini 를 필수로 뒀는데, 그러면 LM Studio 만 쓰는 사람의
-# 멀쩡한 설치가 "필수 항목 실패: claude, codex, gemini" 로 보인다 -- ffmpeg 을
+# 멀쩡한 설치가 "Required checks failed: claude, codex, gemini" 로 보인다 -- ffmpeg 을
 # 두고 피하려던 거짓 경보를 백엔드에서 그대로 재현한 셈이었다(CI 가 잡았다).
 #
 # 어느 백엔드가 필요한지는 노드에서 무엇을 고르느냐에 달려 있고, 진단 시점에는
@@ -64,7 +64,7 @@ def _check_clis() -> list:
             entry["detail"] = str(exc)
         except Exception as exc:  # 진단이 예외로 죽으면 안 된다
             entry["ok"] = False
-            entry["detail"] = f"확인 실패: {exc!r}"
+            entry["detail"] = f"check failed: {exc!r}"
         out.append(entry)
     return out
 
@@ -78,7 +78,7 @@ def _check_video() -> list:
         "name": "ffmpeg",
         "optional": True,
         "ok": bool(ffmpeg),
-        "detail": ffmpeg or "PATH 에 없습니다 (비디오를 안 쓰면 무관)",
+        "detail": ffmpeg or "not on PATH (does not matter unless you use video)",
     })
 
     try:
@@ -87,7 +87,7 @@ def _check_video() -> list:
         cv2_detail = f"cv2 {getattr(cv2, '__version__', '?')}"
         cv2_ok = True
     except Exception:
-        cv2_detail = "설치되어 있지 않습니다 (ffmpeg 이 있으면 무관)"
+        cv2_detail = "not installed (does not matter if ffmpeg is available)"
         cv2_ok = False
     out.append({"name": "opencv (cv2)", "optional": True, "ok": cv2_ok, "detail": cv2_detail})
 
@@ -112,13 +112,13 @@ def _check_lmstudio() -> dict:
         # 반영될 수 있다 -- 진단 결과가 순간적으로 낡을 뿐이라 그대로 둔다.
         models = list_model_ids(timeout_s=_HTTP_TIMEOUT_S)
     except Exception as exc:
-        entry.update(ok=False, detail=f"{base_url} — 확인 실패: {exc!r}")
+        entry.update(ok=False, detail=f"{base_url} - check failed: {exc!r}")
         return entry
 
     if models:
-        entry.update(ok=True, detail=f"{base_url} — 모델 {len(models)}개: {', '.join(models[:3])}")
+        entry.update(ok=True, detail=f"{base_url} - {len(models)} model(s): {', '.join(models[:3])}")
     else:
-        entry.update(ok=False, detail=f"{base_url} — 응답 없음 (LM Studio 서버가 꺼져 있거나 포트가 다릅니다)")
+        entry.update(ok=False, detail=f"{base_url} - no response (the LM Studio server is off, or the port differs)")
     return entry
 
 
@@ -133,11 +133,11 @@ def _check_frontend() -> dict:
     js = os.path.join(root, "web", "js", "llmhub_monitor.js")
     pack = os.path.basename(root)
     return {
-        "name": "프론트엔드 JS",
+        "name": "frontend JS",
         "optional": False,
         "ok": os.path.isfile(js),
-        "detail": (f"/extensions/{pack}/llmhub_monitor.js 로 서빙됩니다"
-                   if os.path.isfile(js) else f"파일이 없습니다: {js}"),
+        "detail": (f"/extensions/{pack}/llmhub_monitor.js is being served"
+                   if os.path.isfile(js) else f"file is missing: {js}"),
     }
 
 
@@ -148,7 +148,7 @@ def _check_config() -> dict:
         "name": "config.json",
         "optional": True,
         "ok": exists,
-        "detail": path if exists else "없습니다 (config.example.json 의 기본값으로 동작합니다)",
+        "detail": path if exists else "not present (the defaults from config.example.json are used)",
     }
 
 
@@ -167,13 +167,14 @@ def _backend_summary(checks: list) -> dict:
         ready.append("lmstudio")
 
     return {
-        "name": "확인된 백엔드",
+        "name": "backends detected",
         "optional": True,
         "ok": bool(ready),
         "detail": (
             ", ".join(ready) if ready else
-            "자동으로 확인된 것이 없습니다. 위 항목 중 필요한 것 하나만 준비하면 됩니다 "
-            "(openai_compat 은 주소를 알 수 없어 확인 대상이 아닙니다)"
+            "none detected automatically - set up whichever one you need from the "
+            "items above (openai_compat is not probed because its address is only "
+            "known at run time)"
         ),
     }
 
@@ -208,11 +209,11 @@ def as_text(report: dict = None) -> str:
     """브라우저에서 그냥 읽을 수 있는 형태. 그대로 복사해 붙여넣기 좋게."""
     report = report or collect()
     lines = [
-        f"ComfyUI-LLM-Hub v{report['version']} 자가 진단",
+        f"ComfyUI-LLM-Hub v{report['version']} self-check",
         "=" * 52,
         f"Python   {report['python']}",
         f"OS       {report['platform']}",
-        f"경로     {report['pack_dir']}",
+        f"path     {report['pack_dir']}",
         "",
     ]
     for check in report["checks"]:
@@ -225,13 +226,13 @@ def as_text(report: dict = None) -> str:
 
     lines.append("")
     if report["ok"]:
-        lines.append("노드팩 자체는 정상입니다.")
-        lines.append("[ -- ] 는 없어도 되는 항목입니다 (해당 기능만 못 씁니다).")
-        lines.append("쓰려는 백엔드가 [ -- ] 라면 그 줄의 설명대로 준비하면 됩니다.")
+        lines.append("The node pack itself is healthy.")
+        lines.append("[ -- ] marks optional items; only that one feature is unavailable.")
+        lines.append("If the backend you want is [ -- ], follow the note on that line.")
     else:
-        lines.append(f"필수 항목 실패: {', '.join(report['failed'])}")
+        lines.append(f"Required checks failed: {', '.join(report['failed'])}")
     lines.append("")
-    lines.append("모니터 창이 안 보이면: 브라우저에서 Ctrl+Shift+R (하드 새로고침) 후")
-    lines.append("F12 콘솔에 '[LLM Hub] v...' 줄이 찍히는지 확인하세요.")
-    lines.append("그 줄이 없으면 JS 가 로드되지 않은 것입니다.")
+    lines.append("If the monitor panel is missing: hard-refresh the browser (Ctrl+Shift+R), then")
+    lines.append("check the F12 console for a '[LLM Hub] v...' line.")
+    lines.append("No such line means the JS never loaded.")
     return "\n".join(lines)

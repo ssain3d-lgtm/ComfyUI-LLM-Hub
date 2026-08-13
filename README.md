@@ -21,11 +21,10 @@ same node, switching between them without rewiring anything.
 > **Only `requests` is added to pip.** Everything else uses the standard library or
 > packages ComfyUI already ships.
 
-> **Note on language.** This pack was written for a Korean-speaking author, so the
-> **in-app text is Korean** — widget tooltips, `status` values, and error messages.
-> The English documentation below maps every one of them, and the widget names,
-> config keys and log output are all English. Full localization is not planned for
-> v1; if you want it, open an issue and say so.
+> **Note on language.** Everything the node shows you is **English** — widget names,
+> tooltips, buttons, the on-node monitor, `status` values, error messages and the
+> `/llmhub/health` page. Only the source comments and this file's second half are
+> Korean.
 
 ## 1. Installation
 
@@ -135,6 +134,7 @@ dropdown is LM Studio only.
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
 | `openai_base_url` | Address of the OpenAI-compatible server (`openai_compat` only) |
+| `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
 | `seed` | **The value itself is never used.** It exists so ComfyUI sees "input changed → run again" and skips the cache |
 | `image` *(optional)* | ComfyUI IMAGE |
 | `video` / `video_path` *(optional)* | ComfyUI VIDEO input, or a path to a video file |
@@ -144,8 +144,8 @@ dropdown is LM Studio only.
 > Hover over any input for a tooltip. The `lmstudio_*` widgets are only visible when `backend` is `lmstudio`.
 
 **Collapsing the advanced options.** Most of the inputs above are hidden by default so
-the node stays small. Click the **`▼ 고급`** button on the right of the node's title bar
-to expand them, and **`▲ 고급`** to collapse again. (The same toggle is also in the
+the node stays small. Click the **`▼ Advanced`** button on the right of the node's title bar
+to expand them, and **`▲ Advanced`** to collapse again. (The same toggle is also in the
 node's right-click menu.) `backend`, `prompt`, `system_prompt` and the model dropdown
 always stay visible. The state is saved with the workflow.
 
@@ -158,12 +158,62 @@ The outputs are `text` (the generated text), `status`, and `debug` (raw response
 | `ok` | Completed normally |
 | `error: ...` | Failed, with the reason appended |
 | `rate_limited` | Subscription usage limit hit |
-| `중지됨 — ...` (stopped) | You pressed Stop, or ComfyUI cancelled. **Whatever arrived before the stop is still in `text`** |
+| `stopped - ...` | You pressed Stop, or ComfyUI cancelled. **Whatever arrived before the stop is still in `text`** |
 
 Stops and timeouts are deliberately **not** `ok`. Treating a truncated result as a
 success would let downstream nodes consume it as if it were complete. Even when
 `status` is not `ok`, the node returns an empty `text` and the reason instead of
 raising.
+
+## 3-1. The system prompt editor
+
+The input box on the node is small, so long prompts are hard to read and paste
+into. Click **`✎ System prompt`** on the node's title bar to open a full-size editor.
+
+```
+┌─ System prompt ───────────────────────────────── ✕ ┐
+│ [ my translator ▾ ] [Load] [Save as…] [Delete]      │
+│ ┌────────────────────────────────────────────────┐ │
+│ │ You are a translator.                          │ │
+│ │ Answer with the translation only.              │ │
+│ │                                                │ │
+│ └────────────────────────────────────────────────┘ │
+│ Ctrl+Enter to apply · Esc to cancel [Cancel][Apply] │
+└─────────────────────────────────────────────────────┘
+```
+
+- **Write or paste** the prompt in the large box, then **Apply** to put it back on the node.
+- **Save as…** stores the current text under a name of your choice. **Load** brings it back later, **Delete** removes it.
+- **Cancel**, **Esc** or clicking outside closes without changing the node.
+
+The `system_preset` dropdown at the bottom of the node does the same load without
+opening the editor: **picking a preset replaces the `system_prompt` box** with the
+saved text.
+
+**Where it is stored.** `system_prompts.json` next to the node pack, created from
+`system_prompts.example.json` on first run and **not tracked by git** — `git pull`
+never overwrites your presets. Saving is done by the server, not the browser, so
+presets are still there from another browser or machine.
+
+You can also edit the file by hand. `prompt` may be a string or a list of strings
+joined with newlines, and saving from the editor writes multi-line prompts as a list
+so the file stays readable:
+
+```json
+{
+  "presets": [
+    { "name": "my translator",
+      "prompt": ["You are a translator.", "Answer with the translation only."] }
+  ]
+}
+```
+
+A broken file never stops the node from loading — the dropdown just falls back to
+`(none)` and the reason is printed to the ComfyUI console.
+
+> The dropdown sits at the **bottom** of the node rather than next to `system_prompt`.
+> Widget order is what ComfyUI saves values by, so inserting one in the middle would
+> shift every stored value in workflows you already saved.
 
 ## 4. File access
 
@@ -232,10 +282,10 @@ The node shows the text as it is being generated. Pick the mode with `stream_vie
 | `markdown` | **For document summaries and analysis.** Renders headings, bullets and code blocks so it is easier to read |
 | `off` | No display. Streaming is skipped entirely, and **the panel itself is removed** so the node shrinks |
 
-- The **`복사`** (copy) button in the panel header copies the generated text to the clipboard, so you can use it without wiring the `text` output anywhere.
+- The **`Copy`** button in the panel header copies the generated text to the clipboard, so you can use it without wiring the `text` output anywhere.
 - You can **switch modes mid-generation**; it redraws immediately.
 - Scrolling up pauses auto-scroll; scrolling back to the bottom resumes it.
-- Backends that use tools show progress such as `도구 사용: Read` at the top.
+- Backends that use tools show progress such as `Tool: Read` at the top.
 - The monitor contents are not saved into the workflow file.
 
 How each backend streams (all measured, not assumed):
@@ -329,19 +379,19 @@ Paste this report into any bug report — it answers most of the first round of 
 | status / symptom | Cause and fix |
 |---|---|
 | `git pull` says "Already up to date" but nothing changed | You are probably standing on a feature branch, not `main`. `git pull` only updates the branch you are on. Check with `git branch --show-current`, then `git checkout main` and pull again |
-| `error: LM Studio 서버 응답 없음` | LM Studio is not running, or the port differs. Check the Server tab |
-| `error: claude 로그인 필요` | Run `claude` once in a terminal and log in |
-| `error: codex 로그인 필요` | `codex login` |
-| `error: gemini 로그인 필요` | Run `gemini` and log in with your Google account |
-| `error: '...' 실행 파일을 찾을 수 없습니다` | The CLI is not on your PATH. Put the absolute path in `cli_paths` in `config.json` |
+| `error: no response from the LM Studio server` | LM Studio is not running, or the port differs. Check the Server tab |
+| `error: claude login required` | Run `claude` once in a terminal and log in |
+| `error: codex login required` | `codex login` |
+| `error: gemini login required` | Run `gemini` and log in with your Google account |
+| `error: '...' executable not found` | The CLI is not on your PATH. Put the absolute path in `cli_paths` in `config.json` |
 | `rate_limited` | Subscription limit reached. Claude is 5-hour/weekly, Gemini is daily, Codex is plan credits. For Gemini, switching to a Flash model helps |
-| `error: workspace_dir 확인 필요` | `file_access` is on but the folder is empty or does not exist |
+| `error: workspace_dir needed` | `file_access` is on but the folder is empty or does not exist |
 | `error: timeout(...)` | Increase `timeout_sec`. The CLIs need 2–10 s for a cold start |
 | `tool loop limit` in `debug` | LM Studio only kept calling tools. Raise `tool_loop_max_iters` or make the prompt more specific |
 | `unsupported: temperature` in `debug` | Expected. The CLI backends do not expose that parameter |
 | ffmpeg notice after adding a video | Install ffmpeg and add it to your PATH (§5) |
-| Monitor window does not appear | Hard-refresh the browser (`Ctrl+Shift+R`) so the JS extension reloads, then open the console (F12) and look for `[LLM Hub] v… 모니터 확장 로드됨`. **No such line means the JS never loaded** — check the self-check page above. Also check whether `stream_view` is `off`, which hides the panel on purpose |
-| `lms CLI 를 찾을 수 없어` in `debug` | Add LM Studio's `lms` to your PATH or set `cli_paths.lms` in `config.json`. Without it, TTL still handles the unload |
+| Monitor window does not appear | Hard-refresh the browser (`Ctrl+Shift+R`) so the JS extension reloads, then open the console (F12) and look for `[LLM Hub] v… monitor extension loaded`. **No such line means the JS never loaded** — check the self-check page above. Also check whether `stream_view` is `off`, which hides the panel on purpose |
+| `the lms CLI was not found` in `debug` | Add LM Studio's `lms` to your PATH or set `cli_paths.lms` in `config.json`. Without it, TTL still handles the unload |
 | `lmstudio_model` dropdown is empty | Start LM Studio, then **refresh the browser** |
 
 ### Speed
@@ -379,7 +429,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**255 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**293 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -551,6 +601,7 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
 | `openai_base_url` | OpenAI 호환 서버 주소 (`openai_compat` 전용) |
+| `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
 | `seed` | **값 자체는 쓰지 않습니다.** ComfyUI가 "입력이 바뀌었다 → 다시 실행"으로 인식하게 하는 캐시 무효화용입니다 |
 | `image` *(옵션)* | ComfyUI IMAGE |
 | `video` / `video_path` *(옵션)* | ComfyUI VIDEO 입력 또는 비디오 파일 경로 |
@@ -560,7 +611,7 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 > 각 입력 위에 마우스를 올리면 한국어 설명(툴팁)이 나옵니다. `lmstudio_*` 위젯은 backend가 `lmstudio`일 때만 보입니다.
 
 **고급 옵션 접기/펴기.** 위 입력 대부분은 기본적으로 숨겨져 있어 노드가 작게 유지됩니다.
-노드 **제목 줄 오른쪽의 `▼ 고급` 버튼**을 누르면 펼쳐지고, `▲ 고급`을 누르면 다시 접힙니다.
+노드 **제목 줄 오른쪽의 `▼ Advanced` 버튼**을 누르면 펼쳐지고, `▲ Advanced`를 누르면 다시 접힙니다.
 (노드 우클릭 메뉴에도 같은 항목이 있습니다.)
 `backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다.
 펼침 상태는 워크플로우에 함께 저장됩니다.
@@ -574,12 +625,61 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 | `ok` | 정상 완료 |
 | `error: ...` | 실패. 뒤에 한국어 사유가 붙습니다 |
 | `rate_limited` | 구독 사용량 한도 |
-| `중지됨 — ...` | 사용자가 Stop 을 눌렀거나 ComfyUI Cancel. **받은 부분까지는 `text` 에 들어 있습니다** |
+| `stopped - ...` | 사용자가 Stop 을 눌렀거나 ComfyUI Cancel. **받은 부분까지는 `text` 에 들어 있습니다** |
 
 중지와 타임아웃은 `ok` 가 아닙니다. 잘린 결과를 성공으로 보면 다운스트림이 그대로 쓰게 되므로 일부러 구분합니다.
 `status`가 `ok`가 아니어도 노드는 예외를 던지지 않고 빈 `text`와 함께 이유를 돌려줍니다.
 
 ---
+
+## 3-1. 시스템 프롬프트 편집창
+
+노드 안의 입력칸은 작아서 긴 프롬프트를 붙여넣으면 전체가 안 보입니다.
+노드 **제목 줄의 `✎ System prompt` 버튼**을 누르면 큰 편집창이 열립니다.
+
+```
+┌─ System prompt ───────────────────────────────── ✕ ┐
+│ [ 내 번역기 ▾ ] [Load] [Save as…] [Delete]          │
+│ ┌────────────────────────────────────────────────┐ │
+│ │ 너는 번역가다.                                  │ │
+│ │ 번역문만 답하라.                                │ │
+│ │                                                │ │
+│ └────────────────────────────────────────────────┘ │
+│ Ctrl+Enter to apply · Esc to cancel [Cancel][Apply] │
+└─────────────────────────────────────────────────────┘
+```
+
+- 큰 칸에 **쓰거나 붙여넣고** **Apply** 를 누르면 노드에 반영됩니다.
+- **Save as…** 로 지금 내용을 이름 붙여 저장하고, **Load** 로 나중에 그대로 불러옵니다. **Delete** 로 지웁니다.
+- **Cancel** / **Esc** / 바깥 클릭은 노드를 건드리지 않고 닫습니다.
+
+노드 맨 아래 `system_preset` 드롭다운으로도 같은 불러오기를 할 수 있습니다.
+**프리셋을 고르면 `system_prompt` 칸이 저장된 내용으로 바뀝니다.**
+
+**어디에 저장되나.** 노드팩 폴더의 `system_prompts.json` 입니다. 첫 실행 때
+`system_prompts.example.json` 을 복사해 만들어지고 **git 추적 대상이 아니라서**
+`git pull` 이 여러분의 프리셋을 덮어쓰지 않습니다. 저장은 브라우저가 아니라
+서버가 하므로 다른 브라우저나 다른 기기에서 열어도 그대로 있습니다.
+
+파일을 직접 고쳐도 됩니다. `prompt` 는 문자열이거나 문자열 목록(줄바꿈으로 이음)이고,
+편집창에서 저장할 때도 여러 줄이면 목록으로 씁니다 — 나중에 파일을 열어봤을 때
+읽을 수 있게 하려는 것입니다:
+
+```json
+{
+  "presets": [
+    { "name": "내 번역기",
+      "prompt": ["너는 번역가다.", "번역문만 답하라."] }
+  ]
+}
+```
+
+파일이 깨져도 노드는 정상적으로 뜹니다. 드롭다운만 `(none)` 이 되고 이유가
+ComfyUI 콘솔에 찍힙니다.
+
+> 드롭다운이 `system_prompt` 옆이 아니라 노드 **맨 아래**에 있습니다. ComfyUI 는
+> 위젯 순서로 값을 저장하기 때문에, 중간에 끼워 넣으면 이미 저장해둔 워크플로우의
+> 값이 전부 한 칸씩 밀립니다.
 
 ## 4. 파일 접근
 
@@ -647,10 +747,10 @@ CLI 3종은 파일을 작업 폴더에 넣고 읽게 하거나(claude/gemini) `-
 | `markdown` | **문서 요약/분석용.** 제목·불릿·코드블록을 렌더링해 읽기 편합니다 |
 | `off` | 표시하지 않음. 스트리밍 자체를 하지 않고 **패널도 사라져 노드가 작아집니다** |
 
-- 패널 헤더의 **`복사`** 버튼으로 생성된 텍스트를 클립보드에 담을 수 있습니다. `text` 출력을 어딘가에 연결하지 않아도 결과를 꺼낼 수 있습니다.
+- 패널 헤더의 **`Copy`** 버튼으로 생성된 텍스트를 클립보드에 담을 수 있습니다. `text` 출력을 어딘가에 연결하지 않아도 결과를 꺼낼 수 있습니다.
 - 모드는 **생성 중에 바꿔도** 즉시 다시 그려집니다.
 - 위로 스크롤하면 자동 스크롤이 멈추고, 맨 아래로 내리면 다시 따라갑니다.
-- 도구를 쓰는 백엔드는 상단에 `도구 사용: Read` 같은 진행 상황이 표시됩니다.
+- 도구를 쓰는 백엔드는 상단에 `Tool: Read` 같은 진행 상황이 표시됩니다.
 - 모니터링 창 내용은 워크플로우 파일에 저장되지 않습니다.
 
 백엔드별 스트리밍 방식(모두 실측):
@@ -743,19 +843,19 @@ LM Studio가 응답하는지, 프론트엔드 JS가 ComfyUI가 서빙할 위치�
 | status / 증상 | 원인과 해결 |
 |---|---|
 | `git pull` 했는데 "Already up to date" 라고만 나옴 | 지금 `main`이 아니라 피처 브랜치에 서 있을 가능성이 큽니다. `git pull`은 **서 있는 브랜치만** 당겨옵니다. `git branch --show-current`로 확인하고 `git checkout main` 후 다시 pull 하세요 |
-| `error: LM Studio 서버 응답 없음` | LM Studio가 꺼져 있거나 포트가 다릅니다. 서버 탭에서 실행 여부와 포트를 확인하세요 |
-| `error: claude 로그인 필요` | 터미널에서 `claude`를 한 번 실행해 로그인하세요 |
-| `error: codex 로그인 필요` | `codex login` |
-| `error: gemini 로그인 필요` | `gemini`를 실행해 구글 계정으로 로그인하세요 |
-| `error: '...' 실행 파일을 찾을 수 없습니다` | CLI가 PATH에 없습니다. `config.json`의 `cli_paths`에 절대경로를 넣으세요 |
+| `error: no response from the LM Studio server` | LM Studio가 꺼져 있거나 포트가 다릅니다. 서버 탭에서 실행 여부와 포트를 확인하세요 |
+| `error: claude login required` | 터미널에서 `claude`를 한 번 실행해 로그인하세요 |
+| `error: codex login required` | `codex login` |
+| `error: gemini login required` | `gemini`를 실행해 구글 계정으로 로그인하세요 |
+| `error: '...' executable not found` | CLI가 PATH에 없습니다. `config.json`의 `cli_paths`에 절대경로를 넣으세요 |
 | `rate_limited` | 구독 한도에 걸렸습니다. Claude는 5시간/주간, Gemini는 일일, Codex는 플랜 크레딧 기준입니다. Gemini는 Flash 모델로 바꾸면 완화됩니다 |
-| `error: workspace_dir 확인 필요` | `file_access`를 켰는데 폴더가 비었거나 존재하지 않습니다 |
+| `error: workspace_dir needed` | `file_access`를 켰는데 폴더가 비었거나 존재하지 않습니다 |
 | `error: timeout(...)` | `timeout_sec`를 늘리세요. CLI는 콜드스타트에만 2~10초가 걸립니다 |
 | `debug`에 `tool loop limit` | LM Studio가 도구 호출만 반복했습니다. `tool_loop_max_iters`를 늘리거나 프롬프트를 더 구체적으로 쓰세요 |
 | `debug`에 `unsupported: temperature` | 정상입니다. CLI 백엔드는 해당 파라미터를 노출하지 않습니다 |
 | 비디오를 넣었는데 `ffmpeg` 안내가 뜸 | ffmpeg을 설치하고 PATH에 추가하세요 (§5) |
-| 모니터링 창이 안 보임 | 브라우저를 **하드 새로고침**(`Ctrl+Shift+R`)한 뒤 F12 콘솔에 `[LLM Hub] v… 모니터 확장 로드됨` 줄이 있는지 보세요. **그 줄이 없으면 JS가 아예 로드되지 않은 것**이니 위 자가 진단 페이지를 확인하세요. `stream_view`가 `off`면 의도적으로 숨긴 것입니다 |
-| `debug`에 `lms CLI 를 찾을 수 없어` | LM Studio 설치 폴더의 `lms`를 PATH에 넣거나 `config.json`의 `cli_paths.lms`에 절대경로를 지정하세요. 없어도 TTL로는 해제됩니다 |
+| 모니터링 창이 안 보임 | 브라우저를 **하드 새로고침**(`Ctrl+Shift+R`)한 뒤 F12 콘솔에 `[LLM Hub] v… monitor extension loaded` 줄이 있는지 보세요. **그 줄이 없으면 JS가 아예 로드되지 않은 것**이니 위 자가 진단 페이지를 확인하세요. `stream_view`가 `off`면 의도적으로 숨긴 것입니다 |
+| `debug`에 `the lms CLI was not found` | LM Studio 설치 폴더의 `lms`를 PATH에 넣거나 `config.json`의 `cli_paths.lms`에 절대경로를 지정하세요. 없어도 TTL로는 해제됩니다 |
 | `lmstudio_model` 드롭다운이 비어 있음 | LM Studio를 켠 뒤 **브라우저를 새로고침**하세요 |
 
 ### 속도
@@ -794,7 +894,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**255종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**293종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 

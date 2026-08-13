@@ -109,7 +109,7 @@ class TestMaxTokensRange(unittest.TestCase):
 
     def test_tooltip_warns_about_reasoning_tokens(self):
         """이 위젯을 작게 잡으면 빈 응답이 난다는 걸 여기서 알려야 한다."""
-        self.assertIn("추론", self.spec["tooltip"])
+        self.assertIn("Reasoning", self.spec["tooltip"])
 
 
 class TestReasoningBudget(unittest.TestCase):
@@ -119,7 +119,7 @@ class TestReasoningBudget(unittest.TestCase):
         self.assertTrue(response.status.startswith("error:"), response.status)
         self.assertIn("max_tokens", response.status,
                       f"무엇을 올려야 하는지 말하지 않는다: {response.status}")
-        self.assertIn("추론", response.status,
+        self.assertIn("reasoning", response.status,
                       f"추론 토큰이 원인이라는 말이 없다: {response.status}")
 
     def test_the_numbers_are_reported(self):
@@ -134,7 +134,7 @@ class TestReasoningBudget(unittest.TestCase):
         with ReasoningServer(reasoning_tokens=0, completion_tokens=0,
                              finish_reason="stop") as server:
             response = _run(server, max_tokens=2048)
-        self.assertIn("빈 응답", response.status)
+        self.assertIn("empty response", response.status)
         self.assertNotIn("추론", response.status)
 
     def test_normal_answer_is_untouched(self):

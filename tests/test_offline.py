@@ -126,12 +126,12 @@ class TestPromptRules(unittest.TestCase):
 
     def test_workspace_validation(self):
         missing = LLMRequest("codex", "", "", "x", file_access=True)
-        self.assertIn("workspace_dir 확인 필요", base.validate_workspace(missing))
+        self.assertIn("workspace_dir needed", base.validate_workspace(missing))
 
         bad = LLMRequest(
             "codex", "", "", "x", workspace_dir="/definitely/not/here", file_access=True
         )
-        self.assertIn("workspace_dir 확인 필요", base.validate_workspace(bad))
+        self.assertIn("workspace_dir needed", base.validate_workspace(bad))
 
         good = LLMRequest("codex", "", "", "x", workspace_dir=FIXTURES, file_access=True)
         self.assertEqual(base.validate_workspace(good), "")
@@ -242,14 +242,14 @@ class TestLMStudioBackend(unittest.TestCase):
         cfg = {"lmstudio": {"base_url": "http://127.0.0.1:1"}}
         backend = lmstudio_mod.LMStudioBackend(config=cfg)
         resp = backend.generate(LLMRequest("lmstudio", "", "", "안녕", timeout_s=5))
-        self.assertIn("LM Studio 서버 응답 없음", resp.status)
+        self.assertIn("no response from the LM Studio server", resp.status)
 
     def test_workspace_error_short_circuits(self):
         backend = lmstudio_mod.LMStudioBackend(config={})
         resp = backend.generate(
             LLMRequest("lmstudio", "", "", "안녕", file_access=True)
         )
-        self.assertIn("workspace_dir 확인 필요", resp.status)
+        self.assertIn("workspace_dir needed", resp.status)
 
     def test_mcp_config_note(self):
         with MockLMStudio(script=[{"content": "ok"}]) as server:
@@ -347,7 +347,7 @@ class TestNodeContract(unittest.TestCase):
             max_tokens=128, timeout_sec=10, seed=0,
         )["result"]
         self.assertEqual(len(result), 3)
-        self.assertIn("workspace_dir 확인 필요", result[1])
+        self.assertIn("workspace_dir needed", result[1])
 
     def test_mappings_registered(self):
         self.assertIn("LLMHubGenerate", _pack.NODE_CLASS_MAPPINGS)

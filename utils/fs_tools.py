@@ -19,15 +19,15 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "list_dir",
             "description": (
-                "작업 루트 폴더 기준 상대경로의 파일/폴더 목록을 돌려준다. "
-                "루트 자체는 '.' 또는 빈 문자열로 지정한다."
+                "List files and folders at a path relative to the working root. "
+                "Use '.' or an empty string for the root itself."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "작업 루트 기준 상대경로. 루트는 '.'",
+                        "description": "Path relative to the working root. Use '.' for the root.",
                     }
                 },
                 "required": ["path"],
@@ -39,15 +39,15 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "read_file",
             "description": (
-                "작업 루트 폴더 기준 상대경로의 텍스트 파일 내용을 돌려준다. "
-                "바이너리 파일은 크기만 알려준다."
+                "Read a text file at a path relative to the working root. "
+                "For binary files only the size is reported."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "작업 루트 기준 상대경로 파일",
+                        "description": "Path to a file, relative to the working root.",
                     }
                 },
                 "required": ["path"],
@@ -80,7 +80,7 @@ def safe_resolve(workspace_dir: str, rel_path: str) -> str:
     if resolved == root:
         return resolved
     if not resolved.startswith(root + os.sep):
-        raise PathDenied(f"access denied: '{rel_path}' 는 작업 루트 밖입니다")
+        raise PathDenied(f"access denied: '{rel_path}' is outside the working root")
     return resolved
 
 
@@ -114,13 +114,13 @@ def list_dir(workspace_dir: str, path: str) -> str:
         return str(exc)
 
     if not os.path.isdir(target):
-        return f"error: 폴더가 아닙니다: {path}"
+        return f"error: not a folder: {path}"
 
     entries = []
     try:
         names = sorted(os.listdir(target))
     except OSError as exc:
-        return f"error: 폴더를 읽을 수 없습니다: {exc}"
+        return f"error: could not read the folder: {exc}"
 
     truncated = False
     if len(names) > MAX_DIR_ENTRIES:
@@ -141,7 +141,7 @@ def list_dir(workspace_dir: str, path: str) -> str:
 
     result = {"path": path or ".", "entries": entries}
     if truncated:
-        result["note"] = f"{MAX_DIR_ENTRIES}개까지만 표시됨"
+        result["note"] = f"{MAX_DIR_ENTRIES} entries shown at most"
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -153,14 +153,14 @@ def read_file(workspace_dir: str, path: str, max_bytes: int = 262144) -> str:
         return str(exc)
 
     if not os.path.isfile(target):
-        return f"error: 파일이 없습니다: {path}"
+        return f"error: no such file: {path}"
 
     try:
         size = os.path.getsize(target)
         with open(target, "rb") as fh:
             raw = fh.read(max_bytes + 1)
     except OSError as exc:
-        return f"error: 파일을 읽을 수 없습니다: {exc}"
+        return f"error: could not read the file: {exc}"
 
     if _looks_binary(raw[:8192]):
         return f"binary file ({size} bytes)"
@@ -169,7 +169,7 @@ def read_file(workspace_dir: str, path: str, max_bytes: int = 262144) -> str:
     raw = raw[:max_bytes]
     text = raw.decode("utf-8", errors="replace")
     if over_limit:
-        text += f"\n...truncated ({size} bytes 중 앞 {max_bytes} bytes)"
+        text += f"\n...truncated ({size} bytes, first {max_bytes} bytes)"
     return text
 
 
@@ -182,4 +182,4 @@ def dispatch_tool(name: str, arguments: dict, workspace_dir: str, max_bytes: int
         return list_dir(workspace_dir, path)
     if name == "read_file":
         return read_file(workspace_dir, path, max_bytes)
-    return f"error: 알 수 없는 도구입니다: {name}"
+    return f"error: unknown tool: {name}"

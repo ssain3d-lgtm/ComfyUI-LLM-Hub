@@ -64,7 +64,7 @@ def resolve_video(video_obj=None, video_path: str = "", tmp_dir: str = "") -> tu
     if path:
         if os.path.isfile(path):
             return os.path.abspath(path), ""
-        return "", f"video: 파일을 찾을 수 없습니다 → {path}"
+        return "", f"video: file not found -> {path}"
 
     if video_obj is None:
         return "", ""
@@ -73,7 +73,7 @@ def resolve_video(video_obj=None, video_path: str = "", tmp_dir: str = "") -> tu
     if isinstance(video_obj, str):
         if os.path.isfile(video_obj):
             return os.path.abspath(video_obj), ""
-        return "", f"video: 파일을 찾을 수 없습니다 → {video_obj}"
+        return "", f"video: file not found -> {video_obj}"
 
     # ComfyUI 계열 노드가 dict 로 넘기는 경우
     if isinstance(video_obj, dict):
@@ -102,9 +102,9 @@ def resolve_video(video_obj=None, video_path: str = "", tmp_dir: str = "") -> tu
             if os.path.isfile(dest):
                 return os.path.abspath(dest), ""
         except Exception as exc:
-            return "", f"video: VIDEO 입력 저장 실패 — {type(exc).__name__}: {exc}"
+            return "", f"video: could not save the VIDEO input - {type(exc).__name__}: {exc}"
 
-    return "", "video: 지원하지 않는 VIDEO 입력 형식 (video_path 로 파일 경로를 직접 넣어보세요)"
+    return "", "video: unsupported VIDEO input format (try passing the file path via video_path instead)"
 
 
 # ---------------------------------------------------------------------------
@@ -181,11 +181,11 @@ def _extract_ffmpeg(path: str, max_frames: int, out_dir: str) -> tuple:
                     timeout=120,
                 )
             except subprocess.SubprocessError as exc:
-                return frames, f"video: ffmpeg 실행 실패 — {exc}"
+                return frames, f"video: could not run ffmpeg - {exc}"
             if result.returncode == 0 and os.path.isfile(dest):
                 frames.append(os.path.abspath(dest))
         if frames:
-            return frames, f"video: ffmpeg 로 {len(frames)}장 추출 (길이 {duration:.1f}s)"
+            return frames, f"video: extracted {len(frames)} frames with ffmpeg (duration {duration:.1f}s)"
 
     # 길이를 못 구했으면 앞에서부터 초당 1장씩 뽑아 max_frames 로 자른다.
     # ffmpeg image2 의 -start_number 기본값은 1 이므로 파일도 01 부터 생긴다.
@@ -201,17 +201,17 @@ def _extract_ffmpeg(path: str, max_frames: int, out_dir: str) -> tuple:
             timeout=300,
         )
     except subprocess.SubprocessError as exc:
-        return [], f"video: ffmpeg 실행 실패 — {exc}"
+        return [], f"video: could not run ffmpeg - {exc}"
 
     if result.returncode != 0:
         tail = "\n".join((result.stderr or "").strip().splitlines()[-5:])
-        return [], f"video: ffmpeg 프레임 추출 실패 — {tail}"
+        return [], f"video: ffmpeg frame extraction failed - {tail}"
 
     # 실제로 만들어진 파일을 이름순으로 모은다(번호 시작점에 의존하지 않는다).
     for name in sorted(os.listdir(out_dir)):
         if name.startswith("llmhub_frame_") and name.endswith(".png"):
             frames.append(os.path.abspath(os.path.join(out_dir, name)))
-    return frames, f"video: ffmpeg 로 {len(frames)}장 추출 (초당 1장)"
+    return frames, f"video: extracted {len(frames)} frames with ffmpeg (1 per second)"
 
 
 def _extract_opencv(path: str, max_frames: int, out_dir: str) -> tuple:
@@ -219,7 +219,7 @@ def _extract_opencv(path: str, max_frames: int, out_dir: str) -> tuple:
 
     capture = cv2.VideoCapture(path)
     if not capture.isOpened():
-        return [], f"video: cv2 가 파일을 열지 못했습니다 → {path}"
+        return [], f"video: cv2 could not open the file -> {path}"
 
     try:
         total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -241,8 +241,8 @@ def _extract_opencv(path: str, max_frames: int, out_dir: str) -> tuple:
                 frames.append(os.path.abspath(dest))
 
         if not frames:
-            return [], "video: cv2 로 프레임을 읽지 못했습니다"
-        return frames, f"video: cv2 로 {len(frames)}장 추출 (총 {total} 프레임)"
+            return [], "video: cv2 could not read any frames"
+        return frames, f"video: extracted {len(frames)} frames with cv2 (of {total} total)"
     finally:
         capture.release()
 
@@ -253,7 +253,7 @@ def extract_frames(path: str, max_frames: int = 8, out_dir: str = "") -> tuple:
     반환: (PNG 절대경로 리스트, 안내 메시지)
     """
     if not path or not os.path.isfile(path):
-        return [], f"video: 파일을 찾을 수 없습니다 → {path}"
+        return [], f"video: file not found -> {path}"
 
     max_frames = max(1, int(max_frames))
     out_dir = out_dir or os.path.join(os.path.dirname(path), "_llmhub_frames")
@@ -273,9 +273,9 @@ def extract_frames(path: str, max_frames: int = 8, out_dir: str = "") -> tuple:
         try:
             return _extract_opencv(path, max_frames, out_dir)
         except Exception as exc:
-            return [], f"video: cv2 프레임 추출 실패 — {type(exc).__name__}: {exc}"
+            return [], f"video: cv2 frame extraction failed - {type(exc).__name__}: {exc}"
 
     return [], (
-        "video: 프레임 추출기가 없습니다. ffmpeg 를 설치하고 PATH 에 추가하세요 "
-        "(https://ffmpeg.org/download.html). ComfyUI 환경에 opencv-python 이 있으면 그것도 쓸 수 있습니다."
+        "video: no frame extractor available. Install ffmpeg and add it to PATH "
+        "(https://ffmpeg.org/download.html). opencv-python in the ComfyUI environment works too."
     )

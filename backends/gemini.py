@@ -41,9 +41,9 @@ from .base import (
 )
 
 LOGIN_HINT = (
-    "error: gemini 로그인 필요 — 터미널에서 gemini 를 실행해 구글 계정으로 로그인하세요"
+    "error: gemini login required - run gemini in a terminal and sign in with your Google account"
 )
-RATE_LIMIT_HINT = "gemini 쿼터 초과 — Flash 모델로 바꾸거나 한도 리셋을 기다리세요"
+RATE_LIMIT_HINT = "gemini quota exceeded - switch to a Flash model or wait for the limit to reset"
 
 
 class GeminiBackend(BaseBackend):
@@ -89,16 +89,16 @@ class GeminiBackend(BaseBackend):
 
             if req.mcp_config:
                 notes.append(
-                    "gemini: mcp_config 는 전역 settings.json 사이드이펙트 때문에 v1 미적용"
+                    "gemini: mcp_config is not applied in v1 - it would require editing the global settings.json"
                 )
 
             node_id = getattr(req.emitter, "node_id", None)
             safe_extra, rejected = screen_extra_args(parse_extra_args(req.extra_args))
             if rejected:
                 notes.append(
-                    "extra_args: 샌드박스를 푸는 위험 플래그를 차단했습니다 → "
+                    "extra_args: blocked flags that would unlock the sandbox -> "
                     + " ".join(rejected)
-                    + " (필요하면 config.json 의 allow_unsafe_extra_args=true)"
+                    + " (set allow_unsafe_extra_args=true in config.json if you really need them)"
                 )
             args += safe_extra
 
@@ -106,7 +106,7 @@ class GeminiBackend(BaseBackend):
             media = list(req.image_paths or []) + list(req.video_paths or [])
             staged = stage_media(media, cwd)
             if req.video_paths:
-                notes.append(f"gemini: 비디오 {len(req.video_paths)}개를 네이티브로 전달")
+                notes.append(f"gemini: passing {len(req.video_paths)} video file(s) natively")
             prompt = _build_prompt(req, staged)
             notes.append(unsupported_note("gemini", "temperature", "max_tokens"))
 
@@ -170,7 +170,7 @@ class GeminiBackend(BaseBackend):
                                raw_debug=truncate_debug("\n".join(notes) + "\n" + message))
 
         if code == -1:
-            return LLMResponse(status="error: timeout — gemini 응답이 제한 시간 안에 오지 않음",
+            return LLMResponse(status="error: timeout - gemini did not respond within the time limit",
                                duration_s=duration,
                                raw_debug=truncate_debug("\n".join(notes) + "\n" + tail_lines(stderr)))
 
@@ -184,7 +184,7 @@ class GeminiBackend(BaseBackend):
         if final is None or code != 0:
             return LLMResponse(
                 text=text,
-                status=f"error: gemini 비정상 종료(exit {code}) — 받은 부분까지만 반환",
+                status=f"error: gemini exited abnormally (exit {code}) - returning what arrived so far",
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
@@ -197,7 +197,7 @@ class GeminiBackend(BaseBackend):
 
         if code == -1:
             return LLMResponse(
-                status="error: timeout — gemini 응답이 제한 시간 안에 오지 않음",
+                status="error: timeout - gemini did not respond within the time limit",
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
@@ -246,14 +246,14 @@ class GeminiBackend(BaseBackend):
                 debug += "\n" + json.dumps(stats, ensure_ascii=False)[:1200]
             return LLMResponse(
                 text=text.strip(),
-                status="ok" if text.strip() else "error: gemini 응답이 비어 있음",
+                status="ok" if text.strip() else "error: the gemini response was empty",
                 duration_s=duration,
                 raw_debug=truncate_debug(debug),
             )
 
         if code != 0:
             return LLMResponse(
-                status=f"error: gemini 종료 코드 {code}",
+                status=f"error: gemini exit code {code}",
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )
@@ -261,9 +261,9 @@ class GeminiBackend(BaseBackend):
         text = (stdout or "").strip()
         return LLMResponse(
             text=text,
-            status="ok" if text else "error: gemini 응답이 비어 있음",
+            status="ok" if text else "error: the gemini response was empty",
             duration_s=duration,
-            raw_debug=truncate_debug(debug + "\n(JSON 파싱 실패, stdout 원문 사용)\n" + tail_lines(stderr)),
+            raw_debug=truncate_debug(debug + "\n(could not parse JSON; using raw stdout)\n" + tail_lines(stderr)),
         )
 
 
@@ -297,13 +297,13 @@ def _on_stream_line(line: str, emitter, state) -> None:
         return
 
     if kind == "tool_use":
-        emitter.set_status(f"도구 사용: {event.get('tool_name', '?')}")
+        emitter.set_status(f"Tool: {event.get('tool_name', '?')}")
         return
     if kind == "init":
-        emitter.set_status(f"모델 준비: {event.get('model', '')}")
+        emitter.set_status(f"loading model: {event.get('model', '')}")
         return
     if kind == "error" and event.get("severity") == "error":
-        emitter.set_status(f"오류: {str(event.get('message', ''))[:80]}")
+        emitter.set_status(f"error: {str(event.get('message', ''))[:80]}")
 
 
 def _build_prompt(req: LLMRequest, staged: list) -> str:

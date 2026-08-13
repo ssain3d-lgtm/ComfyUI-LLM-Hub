@@ -57,7 +57,7 @@ class TestVideoResolve(unittest.TestCase):
     def test_resolve_missing_file_reports_reason(self):
         path, note = video_io.resolve_video(None, "/no/such/clip.mp4")
         self.assertEqual(path, "")
-        self.assertIn("찾을 수 없습니다", note)
+        self.assertIn("file not found", note)
 
     def test_resolve_nothing_is_silent(self):
         path, note = video_io.resolve_video(None, "")
@@ -121,7 +121,7 @@ class TestFrameExtraction(unittest.TestCase):
     def test_missing_file_reports_reason(self):
         frames, note = video_io.extract_frames("/no/such/clip.mp4", 4)
         self.assertEqual(frames, [])
-        self.assertIn("찾을 수 없습니다", note)
+        self.assertIn("file not found", note)
 
 
 class TestNoExtractorGuidance(unittest.TestCase):
@@ -159,7 +159,7 @@ class TestBackendVideoRouting(unittest.TestCase):
         self.assertEqual(resp.status, "ok")
         # Windows 는 역슬래시를 낸다. 그게 맞는 동작이라 단정 쪽을 정규화한다.
         self.assertIn("@_llmhub_media/sample_video.mp4", fake.stdin.replace("\\", "/"))
-        self.assertIn("네이티브", resp.raw_debug)
+        self.assertIn("natively", resp.raw_debug)
 
     def test_claude_converts_video_to_frames(self):
         fake = FakeCli(stdout=json.dumps({"is_error": False, "result": "영상 설명"}))
@@ -168,7 +168,7 @@ class TestBackendVideoRouting(unittest.TestCase):
         ):
             resp = claude_mod.ClaudeCodeBackend(config={}).generate(self._req("claude"))
         self.assertEqual(resp.status, "ok")
-        self.assertIn("비디오 미지원", resp.raw_debug)
+        self.assertIn("no native video support", resp.raw_debug)
 
     def test_codex_converts_video_to_frames(self):
         fake = FakeCli(write_last_message="영상 설명")
@@ -177,7 +177,7 @@ class TestBackendVideoRouting(unittest.TestCase):
         ):
             resp = codex_mod.CodexBackend().generate(self._req("codex"))
         self.assertEqual(resp.status, "ok")
-        self.assertIn("비디오 미지원", resp.raw_debug)
+        self.assertIn("no native video support", resp.raw_debug)
 
     def test_lmstudio_converts_video_to_frames(self):
         with MockLMStudio(script=[{"content": "영상 설명"}]) as server:
@@ -189,7 +189,7 @@ class TestBackendVideoRouting(unittest.TestCase):
             ):
                 resp = backend.generate(self._req("lmstudio"))
         self.assertEqual(resp.status, "ok")
-        self.assertIn("비디오 미지원", resp.raw_debug)
+        self.assertIn("no native video support", resp.raw_debug)
 
     def test_video_max_frames_is_forwarded(self):
         seen = {}
@@ -233,7 +233,7 @@ class TestNodeVideoInputs(unittest.TestCase):
             video_path="/no/such/clip.mp4",
         )
         self.assertEqual(len(result["result"]), 3)
-        self.assertIn("찾을 수 없습니다", result["result"][2])
+        self.assertIn("file not found", result["result"][2])
 
 
 if __name__ == "__main__":

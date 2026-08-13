@@ -10,8 +10,8 @@
         40
       ],
       "size": [
-        460,
-        130
+        470,
+        170
       ],
       "flags": {},
       "order": 0,
@@ -22,7 +22,7 @@
         "text": ""
       },
       "widgets_values": [
-        "이미지 프롬프트 생성\n\nbackend 를 골라 쓰세요. claude/codex/gemini 는 각 CLI 로그인이,\nlmstudio 는 서버 실행이 필요합니다.\ntext 출력을 CLIP Text Encode 에 연결하면 됩니다."
+        "Image prompt generation\n\nWire the 'text' output into a CLIP Text Encode node.\nstream_view is 'plain' so you see the exact characters that reach CLIP.\n\nThe 'System prompt' button on the node title bar opens a larger editor\nwhere you can write, paste and save prompts as presets."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -32,11 +32,11 @@
       "type": "LLMHubGenerate",
       "pos": [
         40,
-        200
+        240
       ],
       "size": [
-        420,
-        520
+        430,
+        620
       ],
       "flags": {},
       "order": 1,
@@ -81,8 +81,8 @@
       },
       "widgets_values": [
         "claude",
-        "눈 내리는 밤의 한옥 마을, 따뜻한 창문 불빛",
-        "너는 이미지 생성 프롬프트 작성기다. 설명이나 인사 없이 쉼표로 구분된 영어 태그만 한 줄로 출력한다.",
+        "A cat sleeping on a windowsill in the afternoon sun.",
+        "You write prompts for a text-to-image model.\nAnswer with the prompt only - no preamble, no explanation.\nUse comma-separated English keywords. Keep it under 60 words.",
         "",
         false,
         "",
@@ -99,7 +99,9 @@
         "(auto)",
         300,
         true,
-        "(auto)"
+        "haiku",
+        "",
+        "(none)"
       ]
     }
   ],

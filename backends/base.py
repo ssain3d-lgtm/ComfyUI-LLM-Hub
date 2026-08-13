@@ -11,8 +11,8 @@ MAX_DEBUG_CHARS = 4000
 
 # file_access=True 일 때 시스템 프롬프트 끝에 자동 주입되는 안내 한 줄 (DESIGN §7).
 WORKSPACE_HINT_TEMPLATE = (
-    "작업 루트 폴더는 {workspace_dir} 이다. "
-    "파일이 필요하면 먼저 목록을 확인한 뒤 필요한 파일만 읽어라."
+    "The working root folder is {workspace_dir}. "
+    "If you need files, list them first and read only the ones you need."
 )
 
 
@@ -118,9 +118,9 @@ def validate_workspace(req: LLMRequest) -> str:
         return ""
     ws = (req.workspace_dir or "").strip()
     if not ws:
-        return "error: workspace_dir 확인 필요 (file_access=True 인데 경로가 비어 있음)"
+        return "error: workspace_dir needed (file_access is on but the path is empty)"
     if not os.path.isdir(ws):
-        return f"error: workspace_dir 확인 필요 (폴더가 없음: {ws})"
+        return f"error: workspace_dir needed (folder does not exist: {ws})"
     return ""
 
 
@@ -228,7 +228,7 @@ def frames_for_unsupported_video(req: LLMRequest, backend_name: str, out_dir: st
         target_dir = os.path.join(base_dir, f"_llmhub_frames_{index}")
         extracted, message = video_io.extract_frames(path, req.video_max_frames, target_dir)
         if message:
-            notes.append(f"{backend_name}: 비디오 미지원 → {message}")
+            notes.append(f"{backend_name}: no native video support -> {message}")
         frames.extend(extracted)
     return frames, notes
 
@@ -237,4 +237,4 @@ def unsupported_note(backend: str, *names: str) -> str:
     """미지원 파라미터를 debug 에 남길 문구 (DESIGN §5-5)."""
     if not names:
         return ""
-    return f"unsupported: {', '.join(names)} ({backend} CLI 는 해당 파라미터를 노출하지 않음)"
+    return f"unsupported: {', '.join(names)} ({backend} CLI does not expose this parameter)"

@@ -102,7 +102,7 @@ class TestCollect(unittest.TestCase):
         """'필수' 는 노드팩 자체가 성립하는가이지 사용자의 준비 상태가 아니다."""
         report = health.collect()
         required = [c["name"] for c in report["checks"] if not c["optional"]]
-        self.assertEqual(required, ["프론트엔드 JS"])
+        self.assertEqual(required, ["frontend JS"])
 
     def test_backend_summary_lists_what_is_ready(self):
         checks = [
@@ -168,7 +168,7 @@ class TestAsText(unittest.TestCase):
         }
         text = health.as_text(report)
         self.assertIn("[FAIL] 필수것", text)
-        self.assertIn("필수 항목 실패: 필수것", text)
+        self.assertIn("Required checks failed: 필수것", text)
 
 
 class TestRouteWiring(unittest.TestCase):

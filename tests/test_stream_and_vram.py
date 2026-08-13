@@ -151,7 +151,7 @@ class TestClaudeStreaming(unittest.TestCase):
         self.assertEqual(resp.status, "ok")
         self.assertEqual(resp.text, "안녕")
         self.assertEqual(emitter.deltas, ["안", "녕"])
-        self.assertIn("도구 사용: Read", emitter.statuses)
+        self.assertIn("Tool: Read", emitter.statuses)
 
     def test_streaming_flags_used(self):
         fake = StreamFake(stdout=CLAUDE_STREAM)
@@ -220,7 +220,7 @@ class TestGeminiStreaming(unittest.TestCase):
         self.assertEqual(emitter.deltas, ["안", "녕"])
         self.assertEqual(resp.text, "안녕")
         self.assertEqual(resp.status, "ok")
-        self.assertIn("도구 사용: read_file", emitter.statuses)
+        self.assertIn("Tool: read_file", emitter.statuses)
 
     def test_user_echo_is_not_counted(self):
         """role=user 이벤트를 본문으로 착각하면 안 된다."""
@@ -282,7 +282,7 @@ class TestLMStudioVram(unittest.TestCase):
         self.assertTrue(calls, "lms unload 가 호출되지 않았다")
         self.assertEqual(calls[0][1], "unload")
         self.assertEqual(calls[0][2], "mock-model-a")  # 응답이 알려준 실제 모델
-        self.assertIn("VRAM 에서 내렸습니다", resp.raw_debug)
+        self.assertIn("unloaded from VRAM", resp.raw_debug)
 
     def test_no_unload_when_disabled(self):
         calls = []
@@ -327,7 +327,7 @@ class TestLMStudioVram(unittest.TestCase):
         self.assertEqual(resp.status, "ok")
         self.assertTrue(all(not r.get("stream") for r in server.requests))
         # 스트리밍은 못 해도 도구 진행 상황은 보여준다.
-        self.assertTrue(any("도구 사용" in s for s in emitter.statuses))
+        self.assertTrue(any("Tool:" in s for s in emitter.statuses))
 
 
 class TestNodeWiring(unittest.TestCase):
