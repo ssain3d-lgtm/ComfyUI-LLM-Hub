@@ -202,9 +202,9 @@ class LLMHubGenerate:
                 # 저장해둔 예전 워크플로우의 값이 전부 한 칸씩 밀린다.
                 "system_preset": (presets.preset_names(), {
                     "tooltip": "Load a saved system prompt. Picking one replaces the "
-                               "system_prompt box above with the saved text. Use the "
-                               "'System prompt' button on the node title bar to write, "
-                               "paste and save presets in a larger window."}),
+                               "system_prompt box above with the saved text. The pencil "
+                               "button on the node title bar opens a larger window for "
+                               "writing, pasting and saving presets."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},

@@ -704,25 +704,33 @@ function refreshPresetWidget(node, presets, select) {
 //
 // 폭은 라벨에 맞춰 직접 잡는다. 캔버스에 그리는 것이라 CSS 처럼 내용에 맞춰
 // 늘어나지 않는다 -- 좁게 잡으면 글자가 버튼 밖으로 삐져나온다.
+// 아이콘만 그린다. 글자 라벨("▼ Advanced" + "✎ System prompt")을 쓰면 둘이
+// 190px 을 먹어서 노드 제목을 덮어버렸다. 아이콘만 쓰면 46px 이면 된다.
+//
+// 대신 무슨 버튼인지 알 수 없어지므로, 마우스를 올리면 아래에 설명을 그린다.
+// 캔버스에 그리는 버튼이라 HTML 의 title= 툴팁을 쓸 수 없다.
+const BUTTON_WIDTH = 20;
 const BUTTON_HEIGHT = 18;
-const BUTTON_MARGIN = 8;
-const BUTTON_GAP = 6;
+const BUTTON_MARGIN = 6;
+const BUTTON_GAP = 4;
 const HOVER_KEY = "_llmhubBtnHover";
 
 // 오른쪽 끝부터 이 순서로 놓인다.
 const TITLE_BUTTONS = [
   {
     key: "advanced",
-    width: 78,
-    label: (node) =>
-      node.properties?.[SHOW_ADVANCED_PROP] ? "▲ Advanced" : "▼ Advanced",
+    icon: (node) => (node.properties?.[SHOW_ADVANCED_PROP] ? "▴" : "▾"),
+    hint: (node) =>
+      node.properties?.[SHOW_ADVANCED_PROP]
+        ? "Hide advanced options"
+        : "Show advanced options",
     active: (node) => !!node.properties?.[SHOW_ADVANCED_PROP],
     onClick: (node) => toggleAdvanced(node),
   },
   {
     key: "prompt",
-    width: 104,
-    label: () => "✎ System prompt",
+    icon: () => "✎",
+    hint: () => "Edit the system prompt",
     active: () => false,
     onClick: (node) => openPromptEditor(node),
   },
@@ -733,8 +741,8 @@ function buttonRects(node) {
   const y = -titleHeight + (titleHeight - BUTTON_HEIGHT) / 2;
   let right = (node.size?.[0] ?? 0) - BUTTON_MARGIN;
   return TITLE_BUTTONS.map((spec) => {
-    const rect = { spec, x: right - spec.width, y, w: spec.width, h: BUTTON_HEIGHT };
-    right -= spec.width + BUTTON_GAP;
+    const rect = { spec, x: right - BUTTON_WIDTH, y, w: BUTTON_WIDTH, h: BUTTON_HEIGHT };
+    right -= BUTTON_WIDTH + BUTTON_GAP;
     return rect;
   });
 }
@@ -752,13 +760,15 @@ function hitButton(node, pos) {
 function drawTitleButtons(node, ctx) {
   if (node.flags?.collapsed) return;
   const hovered = node[HOVER_KEY];
+  let tooltip = null;
 
   ctx.save();
-  ctx.font = "11px sans-serif";
+  ctx.font = "12px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const r of buttonRects(node)) {
     const hover = hovered === r.spec.key;
+    if (hover) tooltip = r;
     ctx.beginPath();
     // roundRect 는 비교적 최근 API 라 없을 수 있다. 없으면 각진 사각형으로 떨어진다.
     if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, 4);
@@ -770,9 +780,37 @@ function drawTitleButtons(node, ctx) {
     ctx.stroke();
 
     ctx.fillStyle = "#e8e8e8";
-    ctx.fillText(r.spec.label(node), r.x + r.w / 2, r.y + r.h / 2);
+    ctx.fillText(r.spec.icon(node), r.x + r.w / 2, r.y + r.h / 2);
   }
+  if (tooltip) drawButtonHint(node, ctx, tooltip);
   ctx.restore();
+}
+
+// 아이콘만으로는 무슨 버튼인지 알 수 없다. 마우스를 올린 동안 본문 위쪽에
+// 설명을 그린다 -- 캔버스라 HTML 툴팁을 못 쓴다.
+function drawButtonHint(node, ctx, rect) {
+  const text = rect.spec.hint(node);
+  ctx.font = "11px sans-serif";
+  const padding = 6;
+  const width = ctx.measureText(text).width + padding * 2;
+  const height = 18;
+  // 버튼 바로 아래(본문 첫 줄 위)에 오른쪽 맞춤으로. 노드 왼쪽 밖으로는 안 나가게.
+  const x = Math.max(4, rect.x + rect.w - width);
+  const y = rect.y + rect.h + 4;
+
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, width, height, 4);
+  else ctx.rect(x, y, width, height);
+  ctx.fillStyle = "#11141a";
+  ctx.fill();
+  ctx.strokeStyle = "#5a6270";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = "#e8e8e8";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + padding, y + height / 2);
 }
 
 // --------------------------------------------------------------------------

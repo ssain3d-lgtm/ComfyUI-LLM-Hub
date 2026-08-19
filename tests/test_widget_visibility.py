@@ -204,7 +204,35 @@ class TestAdvancedButton(unittest.TestCase):
     def test_buttons_do_not_overlap(self):
         """오른쪽 끝부터 폭+간격만큼 물러나며 놓아야 겹치지 않는다."""
         body = self.javascript.split("function buttonRects", 1)[1].split("\n}", 1)[0]
-        self.assertIn("right -= spec.width + BUTTON_GAP", body)
+        self.assertIn("right -= BUTTON_WIDTH + BUTTON_GAP", body)
+
+    def test_buttons_are_narrow_enough_to_leave_the_title_visible(self):
+        """글자 라벨을 쓰면 둘이 190px 을 먹어 노드 제목을 덮는다 (실제로 겪음).
+
+        아이콘만 쓰면 50px 이면 된다. 여기서 폭을 다시 키우면 같은 증상이
+        돌아오므로 상한을 걸어둔다.
+        """
+        numbers = {}
+        for name in ("BUTTON_WIDTH", "BUTTON_MARGIN", "BUTTON_GAP"):
+            found = re.search(rf"const {name} = (\d+);", self.javascript)
+            self.assertIsNotNone(found, f"{name} 를 못 읽었다")
+            numbers[name] = int(found.group(1))
+        count = self.javascript.split("const TITLE_BUTTONS = [", 1)[1] \
+                               .split("\n];", 1)[0].count("key:")
+        total = (numbers["BUTTON_WIDTH"] * count
+                 + numbers["BUTTON_GAP"] * (count - 1)
+                 + numbers["BUTTON_MARGIN"])
+        self.assertLessEqual(total, 80, f"버튼 줄이 {total}px 이라 제목을 덮는다")
+
+    def test_icon_only_buttons_explain_themselves_on_hover(self):
+        """아이콘만으로는 무슨 버튼인지 알 수 없다.
+
+        캔버스라 HTML title= 툴팁을 못 쓰므로 직접 그려야 한다.
+        """
+        self.assertIn("function drawButtonHint", self.javascript)
+        body = self.javascript.split("const TITLE_BUTTONS = [", 1)[1].split("\n];", 1)[0]
+        self.assertEqual(body.count("icon:"), body.count("key:"))
+        self.assertEqual(body.count("hint:"), body.count("key:"))
 
 
 class TestMonitorPanel(unittest.TestCase):

@@ -7,7 +7,7 @@ English, and the test count went from 138 to **293**.
 ### System prompt editor
 
 The input box on the node is small, so long prompts are hard to read and paste into.
-Click **`✎ System prompt`** on the title bar to open a full-size editor.
+Click the **`✎`** button on the title bar to open a full-size editor.
 
 ```
 ┌─ System prompt ───────────────────────────────── ✕ ┐
@@ -57,11 +57,14 @@ the two are deliberately distinguished.
 
 ### Advanced-options collapse button
 
-**`▼ Advanced`** on the title bar. Collapsed, only `backend` / `prompt` /
+**`▾`** on the title bar. Collapsed, only `backend` / `prompt` /
 `system_prompt` and the model dropdown remain, so the node stays small. The same
 toggle is in the right-click menu.
 
-It is drawn on the canvas rather than made with `addWidget` — widgets take a slot in
+The title-bar buttons are icon-only and show what they do on hover — text labels took
+up 190 px and covered the node's own title.
+
+They are drawn on the canvas rather than made with `addWidget` — widgets take a slot in
 the `widgets_values` array, so inserting one in the middle **shifts every stored value
 in workflows already saved with this node**.
 

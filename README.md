@@ -144,9 +144,9 @@ dropdown is LM Studio only.
 > Hover over any input for a tooltip. The `lmstudio_*` widgets are only visible when `backend` is `lmstudio`.
 
 **Collapsing the advanced options.** Most of the inputs above are hidden by default so
-the node stays small. Click the **`▼ Advanced`** button on the right of the node's title bar
-to expand them, and **`▲ Advanced`** to collapse again. (The same toggle is also in the
-node's right-click menu.) `backend`, `prompt`, `system_prompt` and the model dropdown
+the node stays small. Click the **`▾`** button on the right of the node's title bar to expand them, and
+**`▴`** to collapse again. Hovering over a title-bar button shows what it does.
+(The same toggle is also in the node's right-click menu.) `backend`, `prompt`, `system_prompt` and the model dropdown
 always stay visible. The state is saved with the workflow.
 
 The outputs are `text` (the generated text), `status`, and `debug` (raw response and diagnostics).
@@ -168,7 +168,7 @@ raising.
 ## 3-1. The system prompt editor
 
 The input box on the node is small, so long prompts are hard to read and paste
-into. Click **`✎ System prompt`** on the node's title bar to open a full-size editor.
+into. Click the **`✎`** button on the node's title bar to open a full-size editor.
 
 ```
 ┌─ System prompt ───────────────────────────────── ✕ ┐
@@ -611,7 +611,8 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 > 각 입력 위에 마우스를 올리면 한국어 설명(툴팁)이 나옵니다. `lmstudio_*` 위젯은 backend가 `lmstudio`일 때만 보입니다.
 
 **고급 옵션 접기/펴기.** 위 입력 대부분은 기본적으로 숨겨져 있어 노드가 작게 유지됩니다.
-노드 **제목 줄 오른쪽의 `▼ Advanced` 버튼**을 누르면 펼쳐지고, `▲ Advanced`를 누르면 다시 접힙니다.
+노드 **제목 줄 오른쪽의 `▾` 버튼**을 누르면 펼쳐지고, `▴` 를 누르면 다시 접힙니다.
+제목 줄 버튼에 마우스를 올리면 무슨 버튼인지 설명이 뜹니다.
 (노드 우클릭 메뉴에도 같은 항목이 있습니다.)
 `backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다.
 펼침 상태는 워크플로우에 함께 저장됩니다.
@@ -635,7 +636,7 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 ## 3-1. 시스템 프롬프트 편집창
 
 노드 안의 입력칸은 작아서 긴 프롬프트를 붙여넣으면 전체가 안 보입니다.
-노드 **제목 줄의 `✎ System prompt` 버튼**을 누르면 큰 편집창이 열립니다.
+노드 **제목 줄의 `✎` 버튼**을 누르면 큰 편집창이 열립니다.
 
 ```
 ┌─ System prompt ───────────────────────────────── ✕ ┐
