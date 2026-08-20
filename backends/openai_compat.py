@@ -43,11 +43,17 @@ KNOWN_SERVERS = {
 class OpenAICompatBackend(LMStudioBackend):
     name = "openai_compat"
 
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict = None, base_url_default: str = ""):
         # 부모의 LM Studio 설정을 먼저 읽은 뒤 이 백엔드 것으로 덮어쓴다.
         super().__init__(config=config)
         section = (self.config.get("openai_compat", {}) or {})
-        self.base_url = (section.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+        # base_url_default 는 별칭 백엔드(ollama/vllm/llamacpp)가 넘기는 표준 포트다.
+        # config 값보다 앞에 두는 이유: 드롭다운에서 "llamacpp" 를 고른 것 자체가
+        # 어느 서버를 쓸지 명시한 것이라, 범용 설정값이 그걸 덮으면 놀란다.
+        # 노드의 openai_base_url 을 채우면 apply_base_url 로 그쪽이 최종적으로 이긴다.
+        self.base_url = (
+            base_url_default or section.get("base_url") or DEFAULT_BASE_URL
+        ).rstrip("/")
         # 토큰은 이 백엔드 것만 본다. LM Studio 의 LM_STUDIO_API_KEY 를 끌어다
         # 쓰면 엉뚱한 서버에 남의 토큰을 보내게 된다.
         self.api_token = (

@@ -35,6 +35,12 @@
 ### 기능 요구사항
 
 - F1. `backend` 드롭다운: `lmstudio` / `claude` / `codex` / `gemini`
+<!-- 수정(별칭): openai_compat 에 더해 ollama / vllm / llamacpp 를 드롭다운에
+     추가했다. 구현은 openai_compat 하나 그대로이고, 고르면 그 서버의 표준
+     포트(11434 / 8000 / 8080)가 기본 주소로 잡히는 얇은 별칭이다.
+     이유는 발견성이다 -- llama.cpp 를 쓰려면 "openai_compat 이 그거다" 를 먼저
+     알아야 했는데 드롭다운 어디에도 llama.cpp 라는 글자가 없었다.
+     이름은 반드시 목록 맨 뒤에만 붙인다(저장된 워크플로우 보호). -->
 - F2. `system_prompt`, `prompt`(유저 프롬프트) 입력 → 생성 텍스트 `STRING` 출력
 - F3. 이미지 입력(옵션, ComfyUI `IMAGE`) → 멀티모달 경로로 전달
 - F4. `workspace_dir` 지정 시 해당 폴더 내 파일을 LLM이 읽을 수 있음(백엔드별 방식은 §8)

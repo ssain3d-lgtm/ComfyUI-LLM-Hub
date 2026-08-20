@@ -55,6 +55,101 @@ class TestRegistration(unittest.TestCase):
         self.assertIn("11434", oc_mod.DEFAULT_BASE_URL)
 
 
+class TestAliases(unittest.TestCase):
+    """ollama / vllm / llamacpp 는 openai_compat 과 같은 구현의 별칭이다.
+
+    별칭을 만든 이유는 발견성이다. llama.cpp 를 쓰려면 "openai_compat 이 그거다"
+    를 먼저 알아야 했는데, 드롭다운 어디에도 llama.cpp 라는 글자가 없었다.
+    """
+
+    def test_all_aliases_are_in_the_dropdown(self):
+        for name in backends.OPENAI_COMPAT_ALIASES:
+            self.assertIn(name, backends.BACKEND_NAMES, name)
+
+    def test_existing_names_keep_their_place(self):
+        """별칭은 맨 뒤에만 붙인다. 중간에 끼우면 저장된 워크플로우가 다른
+        백엔드로 열릴 수 있다."""
+        self.assertEqual(
+            backends.BACKEND_NAMES[:5],
+            ["lmstudio", "claude", "codex", "gemini", "openai_compat"],
+        )
+
+    def test_each_alias_is_the_same_backend(self):
+        for name in backends.OPENAI_COMPAT_ALIASES:
+            self.assertIsInstance(
+                backends.get_backend(name), oc_mod.OpenAICompatBackend, name
+            )
+
+    def test_each_alias_lands_on_its_standard_port(self):
+        expected = {
+            "ollama": "http://127.0.0.1:11434",
+            "vllm": "http://127.0.0.1:8000",
+            "llamacpp": "http://127.0.0.1:8080",
+        }
+        # 목록이 늘면 여기도 늘려야 한다. 조용히 빠지지 않게 개수를 먼저 본다.
+        self.assertEqual(set(expected), set(backends.OPENAI_COMPAT_ALIASES))
+        for name, url in expected.items():
+            self.assertEqual(backends.get_backend(name).base_url, url, name)
+
+    def test_alias_says_its_own_name(self):
+        """debug 문구가 'openai_compat: ...' 이면 어느 서버 얘긴지 알 수 없다."""
+        for name in backends.OPENAI_COMPAT_ALIASES:
+            self.assertEqual(backends.get_backend(name).name, name)
+        self.assertEqual(backends.get_backend("openai_compat").name, "openai_compat")
+
+    def test_the_node_field_still_wins(self):
+        """표준 포트가 아닌 곳에 띄웠으면 노드에서 고칠 수 있어야 한다."""
+        impl = backends.get_backend("llamacpp")
+        impl.apply_base_url("http://192.168.0.9:9999")
+        self.assertEqual(impl.base_url, "http://192.168.0.9:9999")
+
+    def test_an_empty_field_does_not_wipe_the_standard_port(self):
+        impl = backends.get_backend("llamacpp")
+        impl.apply_base_url("")
+        self.assertEqual(impl.base_url, "http://127.0.0.1:8080")
+
+    def test_alias_beats_the_generic_config_value(self):
+        """드롭다운에서 llamacpp 를 고른 것 자체가 어느 서버인지 명시한 것이다.
+
+        범용 openai_compat.base_url 이 그걸 덮으면, 고른 것과 다른 서버로 나간다.
+        """
+        cfg = {"openai_compat": {"base_url": "http://127.0.0.1:11434"}}
+        impl = oc_mod.OpenAICompatBackend(
+            config=cfg, base_url_default="http://127.0.0.1:8080"
+        )
+        self.assertEqual(impl.base_url, "http://127.0.0.1:8080")
+
+    def test_plain_openai_compat_still_follows_config(self):
+        """별칭을 넣었다고 기존 동작이 바뀌면 안 된다."""
+        cfg = {"openai_compat": {"base_url": "http://10.0.0.5:1234"}}
+        self.assertEqual(oc_mod.OpenAICompatBackend(config=cfg).base_url,
+                         "http://10.0.0.5:1234")
+
+    def test_aliases_do_not_send_the_lmstudio_ttl(self):
+        """ttl 은 LM Studio 전용 필드다. 엄격한 서버는 400 을 낸다."""
+        for name in backends.OPENAI_COMPAT_ALIASES:
+            impl = backends.get_backend(name)
+            payload = impl._build_payload(
+                base.LLMRequest(name, "", "", "hi", ttl_sec=300), [], "m"
+            )
+            self.assertNotIn("ttl", payload, name)
+
+
+    def test_the_node_runs_end_to_end_on_an_alias(self):
+        """생성자만 맞고 노드 배선이 틀리면 소용없다. 실제로 한 번 돌려본다."""
+        nodes_mod = importlib.import_module(f"{_PACK_NAME}.nodes")
+        with MockLMStudio(script=[{"content": "hello"}]) as server:
+            out = nodes_mod.LLMHubGenerate().generate(
+                backend="llamacpp", prompt="hi", system_prompt="", model="m",
+                file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
+                timeout_sec=10, seed=0, stream_view="off",
+                openai_base_url=server.base_url,
+            )
+        self.assertEqual(out["result"][1], "ok", out["result"][2][:300])
+        self.assertEqual(out["result"][0], "hello")
+        self.assertNotIn("ttl", server.requests[0])
+
+
 class TestPayload(unittest.TestCase):
     def test_ttl_is_not_sent(self):
         """ttl 은 LM Studio 전용이다. 엄격한 서버는 모르는 필드에 400 을 낸다."""
@@ -195,13 +290,50 @@ class TestNodeWiring(unittest.TestCase):
         self.assertEqual(captured["applied"], "http://127.0.0.1:8000")
         self.assertEqual(captured["req"], "http://127.0.0.1:8000")
 
-    def test_js_shows_widget_only_for_this_backend(self):
+    def _backend_only(self):
+        """JS 의 BACKEND_ONLY 리터럴을 {위젯: [백엔드...]} 로 읽는다.
+
+        예전에는 완성된 문자열을 assertIn 으로 비교했는데, 별칭
+        (ollama/vllm/llamacpp)이 늘자 문구가 달라져 깨졌다. 목록 자체를 읽어
+        비교하면 별칭이 더 늘어도 이 테스트는 그대로 산다.
+        """
+        import re
+
         path = os.path.join(_PACK_ROOT, "web", "js", "llmhub_monitor.js")
         with open(path, encoding="utf-8") as fh:
-            js = fh.read()
-        self.assertIn('openai_base_url: ["openai_compat"]', js)
-        # 이 백엔드도 OpenAI API 라 temperature/max_tokens 를 쓴다
-        self.assertIn('temperature: ["lmstudio", "openai_compat"]', js)
+            body = fh.read().split("const BACKEND_ONLY = {", 1)[1].split("\n};", 1)[0]
+        return {
+            name: re.findall(r'"([^"]+)"', names)
+            for name, names in re.findall(r"(\w+)\s*:\s*\[([^\]]*)\]", body)
+        }
+
+    def _family(self):
+        return {"openai_compat", *backends.OPENAI_COMPAT_ALIASES}
+
+    def test_js_shows_the_address_box_for_the_whole_family(self):
+        """별칭도 주소 칸이 필요하다. 표준 포트가 아닌 곳에 띄웠으면 고쳐야 한다."""
+        shown = set(self._backend_only().get("openai_base_url", []))
+        self.assertEqual(shown, self._family())
+
+    def test_js_shows_sampling_widgets_for_the_whole_family(self):
+        """전부 OpenAI API 라 temperature/max_tokens/extra_body 를 쓴다."""
+        mapping = self._backend_only()
+        for widget in ("temperature", "max_tokens", "extra_body"):
+            shown = set(mapping.get(widget, []))
+            self.assertTrue(
+                self._family() <= shown,
+                f"{widget}: {sorted(self._family() - shown)} 에서 안 보인다",
+            )
+
+    def test_lmstudio_only_widgets_stay_lmstudio_only(self):
+        """ttl / unload / 모델 드롭다운은 LM Studio 전용 기능이다.
+
+        별칭에 잘못 열어주면 아무 효과 없는 위젯이 보이고, ttl 은 엄격한 서버가
+        400 을 내는 필드다.
+        """
+        mapping = self._backend_only()
+        for widget in ("lmstudio_ttl_sec", "lmstudio_unload_after", "lmstudio_model"):
+            self.assertEqual(mapping.get(widget), ["lmstudio"], widget)
 
 
 if __name__ == "__main__":
