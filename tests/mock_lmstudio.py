@@ -26,8 +26,13 @@ class MockLMStudio:
     """
 
     def __init__(self, script=None, models=None, fail_without_model=False, sse=False,
-                 require_token=""):
+                 require_token="", reject_seed=False, usage=None):
         self.sse = sse
+        # seed 필드를 모르는 서버 흉내. 실제로 그런 서버가 있는지는 확인 못 했지만,
+        # 있어도 생성 전체가 죽으면 안 되므로 폴백 경로를 검증해둔다.
+        self.reject_seed = reject_seed
+        # 응답에 실어 보낼 usage 딕셔너리 (None 이면 usage 없는 서버).
+        self.usage = usage
         self.script = list(script or [{"content": "OK"}])
         self.models = models or ["mock-model-a", "mock-model-b"]
         self.fail_without_model = fail_without_model
@@ -91,6 +96,12 @@ class MockLMStudio:
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 outer.requests.append(payload)
 
+                if outer.reject_seed and "seed" in payload:
+                    self._send_json(
+                        400, {"error": {"message": "Unknown parameter: 'seed'"}}
+                    )
+                    return
+
                 if outer.fail_without_model and not payload.get("model"):
                     self._send_json(
                         400, {"error": {"message": "model field is required"}}
@@ -135,17 +146,17 @@ class MockLMStudio:
                 else:
                     message = {"role": "assistant", "content": step.get("content", "")}
 
-                self._send_json(
-                    200,
-                    {
-                        "id": "chatcmpl-mock",
-                        "object": "chat.completion",
-                        "model": payload.get("model") or outer.models[0],
-                        "choices": [
-                            {"index": 0, "message": message, "finish_reason": "stop"}
-                        ],
-                    },
-                )
+                body = {
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion",
+                    "model": payload.get("model") or outer.models[0],
+                    "choices": [
+                        {"index": 0, "message": message, "finish_reason": "stop"}
+                    ],
+                }
+                if outer.usage is not None:
+                    body["usage"] = outer.usage
+                self._send_json(200, body)
 
         self._server = HTTPServer(("127.0.0.1", 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)

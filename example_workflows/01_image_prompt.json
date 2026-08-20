@@ -101,7 +101,9 @@
         true,
         "haiku",
         "",
-        "(none)"
+        "(none)",
+        "all_in_one",
+        ""
       ]
     }
   ],

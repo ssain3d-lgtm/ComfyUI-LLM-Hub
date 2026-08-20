@@ -61,12 +61,35 @@ the two are deliberately distinguished.
 `system_prompt` and the model dropdown remain, so the node stays small. The same
 toggle is in the right-click menu.
 
-The title-bar buttons are icon-only and show what they do on hover — text labels took
-up 190 px and covered the node's own title.
+The three title-bar buttons (`▾` `✎` `⟳`) are icon-only and show what they do on
+hover — text labels took up 190 px and covered the node's own title.
 
 They are drawn on the canvas rather than made with `addWidget` — widgets take a slot in
 the `widgets_values` array, so inserting one in the middle **shifts every stored value
 in workflows already saved with this node**.
+
+### Refresh the LM Studio model list without a restart
+
+The `lmstudio_model` dropdown is built when ComfyUI asks the node what its inputs are,
+which happens once at startup. **If ComfyUI starts before the LM Studio server, the list
+is stuck at `(auto)`** and stays that way until you reload the page — and all you see is
+"the dropdown won't open", with no hint as to why.
+
+The **`⟳`** button on the title bar re-fetches it in place: no ComfyUI restart, no page
+reload. It reuses ComfyUI's own `/object_info` route rather than adding a server route,
+so nothing on the Python side changed. One request no matter how many nodes are on the
+canvas, and the result is shown under the button for a few seconds. The node also tries
+once, quietly, when the list looks empty.
+
+### Failures are visible on the node
+
+When a run ended with no text, the panel just stayed blank. The status line is a single
+ellipsized row, so a failure looked exactly like "nothing happened" — one real case had
+three consecutive failures from an empty `workspace_dir` with nothing on screen, and the
+cause only turned up by digging through the server's run history.
+
+Now the reason is written into the panel body in red. Only failures and user stops get
+promoted; `ok` does not, because a large "ok" in the body reads like the model's answer.
 
 ### Self-check page
 
@@ -139,7 +162,7 @@ workflows that are already saved**.
 
 ## Verification
 
-- **293 automated tests** (v1.0.0 had 138), **passing on both Linux and Windows.** CI runs both platforms on every pull request
+- **313 automated tests** (v1.0.0 had 138), **passing on both Linux and Windows.** CI runs both platforms on every pull request
 - To verify without LM Studio, a fake server (including SSE) was written with the standard library
 - claude real-account smoke passed (text / system prompt / file reading / image / video). During the image test the model's attempt to use Bash was **actually blocked** via `permission_denials`
 

@@ -10,3 +10,6 @@ __pycache__/
 
 # 토큰 파일은 절대 커밋하지 않는다 (내용 전체가 API 키다).
 lm_studio_token.txt
+
+# 프리셋 백업 파일. 저장소에 들어갈 물건이 아니다.
+system_prompts.json.bak-*

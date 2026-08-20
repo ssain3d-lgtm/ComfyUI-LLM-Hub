@@ -21,7 +21,9 @@ from .base import (
     LLMRequest,
     LLMResponse,
     detect_rate_limit,
+    format_usage,
     frames_for_unsupported_video,
+    merge_extra_body,
     tail_lines,
     truncate_debug,
     validate_workspace,
@@ -123,6 +125,13 @@ class LMStudioBackend(BaseBackend):
         if req.file_access:
             payload["tools"] = fs_tools.TOOL_SCHEMAS
             payload["tool_choice"] = "auto"
+        # 시드. 0 은 "안 보냄" 이라 기본 설치의 요청 내용은 예전과 똑같다.
+        # OpenAI chat/completions 규격의 필드지만 서버마다 받는지는 다르므로,
+        # 400 이 오면 _run_loop 가 시드를 빼고 한 번 재시도한다.
+        if req.seed and int(req.seed) > 0:
+            payload["seed"] = int(req.seed)
+        # 사용자가 적은 것이 마지막에 이긴다(뼈대 키만 제외).
+        merge_extra_body(payload, req.extra_body, req.file_access)
         return payload
 
     # -- 메인 ---------------------------------------------------------------
@@ -180,7 +189,15 @@ class LMStudioBackend(BaseBackend):
         if req.mcp_config:
             debug_notes.append("lmstudio: mcp_config is planned for v1.5; using the built-in tool loop")
         if req.extra_args:
-            debug_notes.append("lmstudio: extra_args is ignored by this HTTP backend")
+            debug_notes.append(
+                f"{self.name}: extra_args is ignored by this HTTP backend "
+                "(use extra_body for JSON payload fields)"
+            )
+        # 실제 병합은 _build_payload 가 매 반복마다 한다. 여기서는 빈 dict 에
+        # 같은 규칙을 한 번 돌려 안내 문구만 얻는다(중복 기록 방지).
+        debug_notes.extend(merge_extra_body({}, req.extra_body, req.file_access))
+        # 스트리밍/비스트리밍 어느 경로로 끝나든 한 곳에서 usage 를 적는다.
+        self._last_usage = None
 
         try:
             import requests  # noqa: F401
@@ -209,6 +226,9 @@ class LMStudioBackend(BaseBackend):
             return self._map_exception(exc, started, debug_notes)
 
         debug_notes.extend(notes)
+        usage_line = format_usage(getattr(self, "_last_usage", None))
+        if usage_line:
+            debug_notes.append(usage_line)
         duration = time.time() - started
 
         if isinstance(text, LLMResponse):  # _run_loop 가 오류 응답을 그대로 돌려준 경우
@@ -283,6 +303,10 @@ class LMStudioBackend(BaseBackend):
                 continue
             if obj.get("model"):
                 self._served_model = obj["model"]
+            # 마지막 청크에 usage 를 실어주는 서버가 있다. 있으면 쓰고 없으면 만다
+            # (stream_options 를 보내 강제하지는 않는다 -- 실측을 못 했다, §0-5).
+            if isinstance(obj.get("usage"), dict):
+                self._last_usage = obj["usage"]
             for choice in obj.get("choices") or []:
                 delta = choice.get("delta") or {}
                 # 추론 모델은 답을 쓰기 전에 사고 과정을 먼저 흘린다. 이걸 안 받으면
@@ -303,6 +327,8 @@ class LMStudioBackend(BaseBackend):
         """툴 루프 (DESIGN §8.1). 반환: (text, debug_notes) 또는 (LLMResponse, notes)."""
         notes = []
         retried_with_model = False
+        # 시드를 모르는 서버가 400 을 내면 여기가 켜지고 다음 요청부터 뺀다.
+        drop_seed = False
         last_text = ""
 
         # 툴을 선언한 요청(file_access=True)은 delta 로 오는 tool_calls 조립이
@@ -327,6 +353,8 @@ class LMStudioBackend(BaseBackend):
                     notes,
                 )
             payload = self._build_payload(req, messages, model)
+            if drop_seed:
+                payload.pop("seed", None)
 
             if streaming:
                 resp, streamed, timed_out = self._stream_chat(req, payload)
@@ -370,6 +398,16 @@ class LMStudioBackend(BaseBackend):
                         model = fallback
                         notes.append(f"lmstudio: no model given -> using '{fallback}' from /v1/models")
                         continue
+                # seed 는 OpenAI 규격 필드지만 모든 서버가 받는다는 보장은 없다
+                # (실기기로 확인하지 못했다, §0-1). 400 이면 시드만 빼고 한 번 더
+                # 해본다 -- 시드 하나 때문에 생성 전체가 실패하면 안 된다.
+                if not drop_seed and resp.status_code == 400 and "seed" in payload:
+                    drop_seed = True
+                    notes.append(
+                        "lmstudio: the server rejected 'seed' (HTTP 400) -> retried without it "
+                        "(this server cannot reproduce results by seed)"
+                    )
+                    continue
                 status = "rate_limited" if detect_rate_limit(body) else f"error: LM Studio HTTP {resp.status_code}"
                 return (
                     LLMResponse(status=status, raw_debug=f"HTTP {resp.status_code}\n{body}"),
@@ -380,6 +418,11 @@ class LMStudioBackend(BaseBackend):
             # 실제로 어떤 모델이 응답했는지 기록해 둔다(언로드 대상 파악용).
             if data.get("model"):
                 self._served_model = data["model"]
+            # 툴 루프는 여러 번 도는데, 마지막 응답의 usage 가 누적치가 아니라
+            # 그 요청 한 건의 값이다. 그래도 마지막 것을 남긴다 -- 합계를 지어내는
+            # 것보다 실제로 받은 숫자를 그대로 보여주는 편이 낫다.
+            if isinstance(data.get("usage"), dict):
+                self._last_usage = data["usage"]
             choices = data.get("choices") or []
             if not choices:
                 return (

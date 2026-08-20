@@ -105,6 +105,34 @@ Put the address in the `openai_base_url` field (leave it empty to use
 Type the model name into the `model` field above (for example `qwen3:8b`). The
 dropdown is LM Studio only.
 
+#### Hosted providers work too
+
+`openai_compat` is not limited to servers on your own machine. Anything that
+speaks the OpenAI chat-completions API works, because the only things this
+backend needs are an address and a bearer token. Set the token once —
+
+```
+setx OPENAI_COMPAT_API_KEY "sk-..."
+```
+
+— or put it in `config.json` as `openai_compat.api_token`, then point
+`openai_base_url` at the provider:
+
+| Provider | `openai_base_url` |
+|---|---|
+| OpenAI | `https://api.openai.com` |
+| OpenRouter | `https://openrouter.ai/api` |
+| DeepSeek | `https://api.deepseek.com` |
+| Groq | `https://api.groq.com/openai` |
+| Together | `https://api.together.xyz` |
+
+> **Leave `/v1` off the end.** The node appends `/v1/chat/completions` itself.
+> `https://api.openai.com/v1` becomes `.../v1/v1/chat/completions` and 404s.
+
+The token is sent as `Authorization: Bearer <token>` and is never written to the
+`debug` output. Remember that these providers bill per token, unlike a local
+server — see §7 *Cost*.
+
 **Differences from LM Studio:**
 
 - `ttl` is not sent. It is an LM Studio-specific field and stricter servers may return 400.
@@ -126,7 +154,7 @@ dropdown is LM Studio only.
 | `model` | Leave empty for the backend default |
 | `file_access` | When on, the model can read files inside `workspace_dir` |
 | `workspace_dir` | Working root folder (required when `file_access` is on) |
-| `temperature` / `max_tokens` | **`lmstudio` only.** The three CLIs do not expose these flags, so the values are ignored and noted in `debug` |
+| `temperature` / `max_tokens` | **`lmstudio` / `openai_compat` only.** The three CLIs do not expose these flags, so the values are ignored and noted in `debug` |
 | `timeout_sec` | Default 300 seconds |
 | `video_max_frames` | How many frames to extract when converting video (default 8) |
 | `stream_view` | Monitor display mode: `plain` (default) / `markdown` / `off` |
@@ -135,19 +163,32 @@ dropdown is LM Studio only.
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
 | `openai_base_url` | Address of the OpenAI-compatible server (`openai_compat` only) |
 | `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
-| `seed` | **The value itself is never used.** It exists so ComfyUI sees "input changed → run again" and skips the cache |
+| `seed` | Busts ComfyUI's cache so the same prompt runs again. On `lmstudio` / `openai_compat` a **non-zero** value is also sent to the server as the sampling seed; `0` sends nothing. The three CLIs have no seed flag |
+| `batch_mode` | What to do with an image batch: `all_in_one` (default) or `one_per_image`. See §5 |
 | `image` *(optional)* | ComfyUI IMAGE |
 | `video` / `video_path` *(optional)* | ComfyUI VIDEO input, or a path to a video file |
 | `mcp_config` *(optional)* | Path to an MCP config JSON (only `claude` actually applies it) |
 | `extra_args` *(optional)* | Raw extra flags for the CLI (advanced). **Flags that unlock the sandbox are blocked automatically** |
+| `extra_body` *(optional)* | **`lmstudio` / `openai_compat` only.** Extra JSON fields merged into the request body. See §3-2 |
 
 > Hover over any input for a tooltip. The `lmstudio_*` widgets are only visible when `backend` is `lmstudio`.
 
-**Collapsing the advanced options.** Most of the inputs above are hidden by default so
-the node stays small. Click the **`▾`** button on the right of the node's title bar to expand them, and
-**`▴`** to collapse again. Hovering over a title-bar button shows what it does.
-(The same toggle is also in the node's right-click menu.) `backend`, `prompt`, `system_prompt` and the model dropdown
-always stay visible. The state is saved with the workflow.
+**Title-bar buttons.** Three small buttons sit on the right of the node's title bar.
+They are icon-only so they do not cover the node's name; **hover one to see what it does.**
+
+| Button | What it does |
+|---|---|
+| **`▾` / `▴`** | Expand / collapse the advanced options. Most inputs are hidden by default so the node stays small; `backend`, `prompt`, `system_prompt` and the model dropdown always stay visible. The state is saved with the workflow |
+| **`✎`** | Open the system prompt editor (§3-1) |
+| **`⟳`** | Refresh the LM Studio model list. Only shown when `backend` is `lmstudio` — see below |
+
+Both the `▾` toggle and `⟳` are also in the node's right-click menu.
+
+**About `⟳`.** The `lmstudio_model` dropdown is built when ComfyUI asks the node what
+its inputs are, which happens once at startup. **If ComfyUI starts before the LM Studio
+server, the list is stuck at `(auto)`** until you reload the page. `⟳` re-fetches it in
+place, so no ComfyUI restart and no page reload. The result appears under the button for
+a few seconds. The node also tries this once, quietly, when the list looks empty.
 
 The outputs are `text` (the generated text), `status`, and `debug` (raw response and diagnostics).
 
@@ -155,10 +196,15 @@ The outputs are `text` (the generated text), `status`, and `debug` (raw response
 
 | status | Meaning |
 |---|---|
-| `ok` | Completed normally |
+| `ok` | Completed normally (`ok - N images` in `one_per_image` mode) |
 | `error: ...` | Failed, with the reason appended |
 | `rate_limited` | Subscription usage limit hit |
 | `stopped - ...` | You pressed Stop, or ComfyUI cancelled. **Whatever arrived before the stop is still in `text`** |
+
+`debug` ends with a `usage:` line whenever the backend reports one — for example
+`usage: prompt=812 completion=140 total=952 cost=$0.0031`. `claude` reports tokens
+and cost; `lmstudio` / `openai_compat` report whatever the server sends back;
+`codex` and `gemini` do not report usage at all, so the line is simply absent.
 
 Stops and timeouts are deliberately **not** `ok`. Treating a truncated result as a
 success would let downstream nodes consume it as if it were complete. Even when
@@ -215,6 +261,33 @@ A broken file never stops the node from loading — the dropdown just falls back
 > Widget order is what ComfyUI saves values by, so inserting one in the middle would
 > shift every stored value in workflows you already saved.
 
+## 3-2. `extra_body` — the escape hatch for local servers
+
+`temperature` and `max_tokens` are the only sampling controls with their own
+widget. Everything else your server accepts goes in `extra_body` as JSON, which is
+merged into the request body. It is the HTTP counterpart of `extra_args`.
+
+```json
+{"top_p": 0.9, "repeat_penalty": 1.1, "stop": ["\n\n"]}
+```
+
+The most useful thing it unlocks is **JSON output**, which turns this node into a
+generator other nodes can parse:
+
+```json
+{"response_format": {"type": "json_object"}}
+```
+
+Rules:
+
+- **`lmstudio` and `openai_compat` only.** The three CLIs have no HTTP body; they say so in `debug` rather than ignoring you silently
+- **Invalid JSON stops the run** with `error: extra_body is not valid JSON — ...`. It is not swallowed, because a setting that quietly does nothing is exactly the problem this widget exists to fix
+- Your fields win over the node's, except `messages` and `stream`, which the node builds itself. While `file_access` is on, `tools` and `tool_choice` are locked too — the tool loop has to get back the schema it declared
+- Whatever is applied or ignored is listed in `debug`
+
+Field names are **your server's**, not this node's. If the server rejects one you
+get its own HTTP 400 text back in `status`.
+
 ## 4. File access
 
 Turn on `file_access` and set `workspace_dir`; that folder becomes the working root.
@@ -248,6 +321,31 @@ each time, so your file system is not visible to them.
 All five backends support images. `lmstudio` and `openai_compat` send a base64
 data URI; the CLIs either place the file in the working folder and let the model
 read it (claude / gemini) or pass it with `-i` (codex).
+
+**A batch of images is two different jobs, so `batch_mode` picks which one.**
+
+| `batch_mode` | What happens | Use it for |
+|---|---|---|
+| `all_in_one` *(default)* | Every image in the batch goes into **one** request. One answer comes back | "Compare these three", "pick the best of these" |
+| `one_per_image` | **One request per image.** The answers come back joined by a `=====` line, in the same order as the batch | Captioning a dataset — one caption per image |
+
+```
+IMAGE (40) ──▶ LLM Hub Generate ──▶ text
+               batch_mode = one_per_image
+                                     caption for image 1
+                                     =====
+                                     caption for image 2
+                                     =====
+                                     ...
+```
+
+`one_per_image` costs **N calls**, so on the three CLIs it is N times the price
+and N cold starts — check §7 *Cost* before pointing it at 200 images. It is
+ignored when there is a video input (frames belong to one clip) or only one image.
+
+If an image fails, its slot is kept as an empty string so caption *n* still lines
+up with image *n*, and `status` says `error: 2/40 images failed - ...` rather than
+`ok`. Pressing Stop finishes the current image and leaves the rest empty.
 
 ### Video — handled differently per backend
 
@@ -429,7 +527,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**293 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**350 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -452,7 +550,10 @@ python tests/test_backends.py --backend claude --video tests/fixtures/sample_vid
 ## 9. Not included in v1
 
 Multi-turn session persistence (`--resume`), file write/edit tools, web search tools,
-full exposure of every backend-specific parameter, an auto-installer.
+a widget for every backend-specific parameter, an auto-installer.
+
+*(There is no widget per parameter, but on `lmstudio` / `openai_compat` you can pass
+whatever the server accepts through `extra_body` — see §3-2.)*
 
 MCP support varies by backend:
 
@@ -571,6 +672,33 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 
 모델 이름은 위쪽 `model` 칸에 직접 적습니다 (예: `qwen3:8b`). 드롭다운은 LM Studio 전용입니다.
 
+#### 유료 API 서비스도 됩니다
+
+`openai_compat` 은 내 컴퓨터의 서버 전용이 아닙니다. 이 백엔드가 필요로 하는 것은
+주소와 토큰뿐이라, OpenAI 챗 API 규격을 말하는 곳이면 어디든 붙습니다. 토큰을 한 번
+설정해두고 —
+
+```
+setx OPENAI_COMPAT_API_KEY "sk-..."
+```
+
+— 또는 `config.json` 의 `openai_compat.api_token` 에 넣고, `openai_base_url` 을
+그 서비스로 향하게 하면 됩니다.
+
+| 서비스 | `openai_base_url` |
+|---|---|
+| OpenAI | `https://api.openai.com` |
+| OpenRouter | `https://openrouter.ai/api` |
+| DeepSeek | `https://api.deepseek.com` |
+| Groq | `https://api.groq.com/openai` |
+| Together | `https://api.together.xyz` |
+
+> **끝에 `/v1` 을 붙이지 마세요.** 노드가 `/v1/chat/completions` 를 직접 이어 붙입니다.
+> `https://api.openai.com/v1` 로 적으면 `.../v1/v1/chat/completions` 가 되어 404 가 납니다.
+
+토큰은 `Authorization: Bearer <토큰>` 으로 전송되며 `debug` 출력에는 절대 실리지
+않습니다. 로컬 서버와 달리 이쪽은 토큰 단위로 과금된다는 점만 기억하세요 (§7 비용 참고).
+
 **LM Studio 와 다른 점:**
 
 - `ttl` 을 보내지 않습니다. LM Studio 전용 필드라 다른 서버는 400 을 낼 수 있습니다
@@ -593,7 +721,7 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 | `model` | 비워두면 백엔드 기본값 |
 | `file_access` | 켜면 `workspace_dir` 안의 파일을 읽을 수 있음 |
 | `workspace_dir` | 작업 루트 폴더 (file_access를 켰다면 필수) |
-| `temperature` / `max_tokens` | **lmstudio에만 적용.** CLI 3종은 해당 플래그를 노출하지 않아 무시되고 `debug`에 기록됩니다 |
+| `temperature` / `max_tokens` | **`lmstudio` / `openai_compat` 에만 적용.** CLI 3종은 해당 플래그를 노출하지 않아 무시되고 `debug`에 기록됩니다 |
 | `timeout_sec` | 기본 300초 |
 | `video_max_frames` | 비디오를 프레임으로 바꿀 때 뽑을 장수 (기본 8) |
 | `stream_view` | 모니터링 창 표시 방식: `plain`(기본) / `markdown` / `off` |
@@ -602,20 +730,33 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
 | `openai_base_url` | OpenAI 호환 서버 주소 (`openai_compat` 전용) |
 | `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
-| `seed` | **값 자체는 쓰지 않습니다.** ComfyUI가 "입력이 바뀌었다 → 다시 실행"으로 인식하게 하는 캐시 무효화용입니다 |
+| `seed` | ComfyUI 캐시를 무효화해 같은 프롬프트를 다시 돌리게 합니다. `lmstudio` / `openai_compat` 에서는 **0이 아닌 값**이면 샘플링 시드로 서버에도 함께 보냅니다(0이면 안 보냅니다). CLI 3종에는 시드 플래그가 없습니다 |
+| `batch_mode` | 이미지 배치를 어떻게 다룰지: `all_in_one`(기본) 또는 `one_per_image`. §5 참조 |
 | `image` *(옵션)* | ComfyUI IMAGE |
 | `video` / `video_path` *(옵션)* | ComfyUI VIDEO 입력 또는 비디오 파일 경로 |
 | `mcp_config` *(옵션)* | MCP 설정 JSON 파일 경로 (claude만 실제 적용) |
 | `extra_args` *(옵션)* | CLI에 덧붙일 원시 플래그(고급). **샌드박스를 푸는 위험 플래그는 자동 차단** |
+| `extra_body` *(옵션)* | **`lmstudio` / `openai_compat` 전용.** 요청 본문에 합칠 추가 JSON 필드. §3-2 참조 |
 
 > 각 입력 위에 마우스를 올리면 한국어 설명(툴팁)이 나옵니다. `lmstudio_*` 위젯은 backend가 `lmstudio`일 때만 보입니다.
 
-**고급 옵션 접기/펴기.** 위 입력 대부분은 기본적으로 숨겨져 있어 노드가 작게 유지됩니다.
-노드 **제목 줄 오른쪽의 `▾` 버튼**을 누르면 펼쳐지고, `▴` 를 누르면 다시 접힙니다.
-제목 줄 버튼에 마우스를 올리면 무슨 버튼인지 설명이 뜹니다.
-(노드 우클릭 메뉴에도 같은 항목이 있습니다.)
-`backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다.
-펼침 상태는 워크플로우에 함께 저장됩니다.
+**제목 줄 버튼.** 노드 제목 줄 오른쪽에 작은 버튼 세 개가 있습니다.
+노드 이름을 가리지 않도록 아이콘만 그리므로, **마우스를 올리면 설명이 뜹니다.**
+
+| 버튼 | 하는 일 |
+|---|---|
+| **`▾` / `▴`** | 고급 옵션 펼치기 / 접기. 위 입력 대부분은 기본적으로 숨겨져 노드가 작게 유지되고, `backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다. 펼침 상태는 워크플로우에 함께 저장됩니다 |
+| **`✎`** | 시스템 프롬프트 편집창 열기 (§3-1) |
+| **`⟳`** | LM Studio 모델 목록 다시 받기. `backend` 가 `lmstudio` 일 때만 보입니다 — 아래 참조 |
+
+`▾` 와 `⟳` 는 노드 우클릭 메뉴에도 있습니다.
+
+**`⟳` 에 대해.** `lmstudio_model` 드롭다운은 ComfyUI 가 노드에게 "입력이 뭐냐" 고
+물을 때 만들어지는데, 그건 시작할 때 한 번뿐입니다. **ComfyUI 가 LM Studio 서버보다
+먼저 뜨면 목록이 `(auto)` 하나로 굳어** 페이지를 새로 열기 전까지 그대로입니다.
+`⟳` 는 그 자리에서 다시 받아옵니다 — ComfyUI 재시작도, 페이지 새로고침도 필요
+없습니다. 결과는 버튼 아래에 몇 초간 표시됩니다. 목록이 비어 보이면 노드가 조용히
+한 번은 알아서 시도하기도 합니다.
 
 출력은 `text`(생성된 텍스트) / `status` / `debug`(원시 응답·진단)입니다.
 
@@ -623,10 +764,15 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 
 | status | 뜻 |
 |---|---|
-| `ok` | 정상 완료 |
+| `ok` | 정상 완료 (`one_per_image` 모드에서는 `ok - N images`) |
 | `error: ...` | 실패. 뒤에 한국어 사유가 붙습니다 |
 | `rate_limited` | 구독 사용량 한도 |
 | `stopped - ...` | 사용자가 Stop 을 눌렀거나 ComfyUI Cancel. **받은 부분까지는 `text` 에 들어 있습니다** |
+
+백엔드가 사용량을 알려주면 `debug` 마지막에 `usage:` 줄이 붙습니다 — 예:
+`usage: prompt=812 completion=140 total=952 cost=$0.0031`. `claude` 는 토큰과 비용을,
+`lmstudio` / `openai_compat` 은 서버가 준 값을 그대로 보여줍니다. `codex` 와 `gemini` 는
+사용량을 알려주지 않아 이 줄이 아예 없습니다.
 
 중지와 타임아웃은 `ok` 가 아닙니다. 잘린 결과를 성공으로 보면 다운스트림이 그대로 쓰게 되므로 일부러 구분합니다.
 `status`가 `ok`가 아니어도 노드는 예외를 던지지 않고 빈 `text`와 함께 이유를 돌려줍니다.
@@ -682,6 +828,35 @@ ComfyUI 콘솔에 찍힙니다.
 > 위젯 순서로 값을 저장하기 때문에, 중간에 끼워 넣으면 이미 저장해둔 워크플로우의
 > 값이 전부 한 칸씩 밀립니다.
 
+## 3-2. `extra_body` — 로컬 서버용 탈출구
+
+전용 위젯이 있는 샘플링 옵션은 `temperature` 와 `max_tokens` 둘뿐입니다. 서버가
+받는 나머지 필드는 `extra_body` 에 JSON 으로 적으면 요청 본문에 그대로 합쳐집니다.
+`extra_args` 의 HTTP 판이라고 보면 됩니다.
+
+```json
+{"top_p": 0.9, "repeat_penalty": 1.1, "stop": ["\n\n"]}
+```
+
+가장 쓸모 있는 건 **JSON 출력**입니다. 이걸 켜면 이 노드가 다른 노드가 파싱할 수
+있는 생성기가 됩니다.
+
+```json
+{"response_format": {"type": "json_object"}}
+```
+
+규칙:
+
+- **`lmstudio` / `openai_compat` 전용.** CLI 3종은 HTTP 본문이 없어서, 조용히 버리지 않고 `debug` 에 그렇게 적습니다
+- **JSON 이 잘못되면 실행을 멈춥니다** (`error: extra_body is not valid JSON — ...`). 삼키지 않는 이유는, 적어둔 설정이 조용히 아무 일도 안 하는 것이 바로 이 위젯을 만든 이유이기 때문입니다
+- 사용자가 적은 값이 노드 값보다 우선합니다. 단 `messages` 와 `stream` 은 노드가 직접 만드는 것이라 예외입니다. `file_access` 가 켜져 있으면 `tools` / `tool_choice` 도 잠깁니다 — 툴 루프는 자기가 선언한 스키마를 그대로 되받아야 하니까요
+- 무엇이 적용되고 무엇이 무시됐는지는 `debug` 에 나옵니다
+
+필드 이름은 이 노드가 아니라 **서버의 것**입니다. 서버가 거부하면 그 서버의 HTTP 400
+문구가 `status` 에 그대로 돌아옵니다.
+
+---
+
 ## 4. 파일 접근
 
 `file_access`를 켜고 `workspace_dir`를 지정하면 그 폴더가 작업 루트가 됩니다.
@@ -713,6 +888,32 @@ ComfyUI 콘솔에 찍힙니다.
 
 5개 백엔드 모두 지원합니다. lmstudio·openai_compat 는 base64 data URI로,
 CLI 3종은 파일을 작업 폴더에 넣고 읽게 하거나(claude/gemini) `-i` 플래그로 넘깁니다(codex).
+
+
+**이미지 배치는 성격이 다른 두 가지 작업이라, `batch_mode` 로 고릅니다.**
+
+| `batch_mode` | 하는 일 | 쓰는 곳 |
+|---|---|---|
+| `all_in_one` *(기본)* | 배치의 모든 이미지가 **한 요청**에 들어갑니다. 답은 하나 | "이 셋을 비교해줘", "이 중에 제일 나은 것" |
+| `one_per_image` | **장당 한 요청.** 답들이 `=====` 줄로 이어져 배치와 같은 순서로 돌아옵니다 | 데이터셋 캡션 — 장당 한 줄 |
+
+```
+IMAGE (40장) ──▶ LLM Hub Generate ──▶ text
+                 batch_mode = one_per_image
+                                       1번 그림 캡션
+                                       =====
+                                       2번 그림 캡션
+                                       =====
+                                       ...
+```
+
+`one_per_image` 는 **N번 호출**합니다. CLI 3종에서는 N배 요금이고 콜드 스타트도 N번이니,
+200장에 걸기 전에 §7 비용을 확인하세요. 비디오 입력이 있거나(프레임은 한 영상의 조각입니다)
+이미지가 한 장이면 무시됩니다.
+
+어떤 장이 실패해도 그 자리는 빈 문자열로 남겨 **n번째 캡션이 n번째 그림과 계속 맞도록**
+합니다. 그리고 `status` 는 `ok` 가 아니라 `error: 2/40 images failed - ...` 가 됩니다.
+Stop 을 누르면 진행 중인 장까지만 하고 나머지는 빈 자리로 남습니다.
 
 ### 비디오 — 백엔드별로 처리 방식이 다릅니다
 
@@ -895,7 +1096,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**293종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**350종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 
@@ -920,7 +1121,10 @@ python tests/test_backends.py --backend claude --video tests/fixtures/sample_vid
 ## 9. v1에서 하지 않는 것
 
 멀티턴 세션 유지(`--resume`), 파일 쓰기/편집 도구, 웹검색 도구,
-백엔드별 고급 파라미터 전체 노출, 자동 설치기.
+백엔드별 고급 파라미터마다 위젯을 만드는 것, 자동 설치기.
+
+*(파라미터마다 위젯을 만들지는 않지만, `lmstudio` / `openai_compat` 에서는 서버가
+받는 필드를 `extra_body` 로 그대로 넘길 수 있습니다 — §3-2 참조.)*
 
 MCP는 백엔드마다 상황이 다릅니다:
 

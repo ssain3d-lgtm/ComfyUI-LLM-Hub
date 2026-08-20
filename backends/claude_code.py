@@ -28,6 +28,8 @@ from .base import (
     LLMResponse,
     detect_login_error,
     detect_rate_limit,
+    extra_body_ignored_note,
+    format_usage,
     frames_for_unsupported_video,
     stage_media,
     tail_lines,
@@ -143,6 +145,9 @@ class ClaudeCodeBackend(BaseBackend):
 
             prompt = _build_prompt(req, staged)
             notes.append(unsupported_note("claude", "temperature", "max_tokens"))
+            extra_body_note = extra_body_ignored_note("claude", req)
+            if extra_body_note:
+                notes.append(extra_body_note)
 
             if streaming:
                 code, stdout, stderr, duration = run_cli_stream(
@@ -270,6 +275,11 @@ class ClaudeCodeBackend(BaseBackend):
             if payload.get(key) is not None
         }
         debug = debug + "\n" + json.dumps(meta, ensure_ascii=False)[:1500]
+        # 위 meta 는 CLI 가 준 JSON 을 그대로 덤프한 것이라 백엔드마다 모양이
+        # 다르다. 사람이 읽을 한 줄은 모든 백엔드가 같은 형식으로 따로 적는다.
+        usage_line = format_usage(payload.get("usage"), payload.get("total_cost_usd"))
+        if usage_line:
+            debug = debug + "\n" + usage_line
 
         if payload.get("is_error"):
             status = "rate_limited" if detect_rate_limit(result) else f"error: claude — {result[:200]}"

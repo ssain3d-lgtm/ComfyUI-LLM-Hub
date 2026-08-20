@@ -10,6 +10,8 @@ readme = "README.md"
 [project.urls]
 Repository = "https://github.com/ssain3d-lgtm/ComfyUI-LLM-Hub"
 
+# pytest 설정을 여기 두면 안 된다 -- tests/pytest.ini 에 있다. 이유는 그 파일에.
+
 [tool.comfy]
 # PublisherId 는 Comfy Registry 의 핸들(@ 뒤 문자열)입니다. 보통 GitHub 사용자명과
 # 같지만 다를 수 있으니 https://registry.comfy.org 에 로그인해 확인하세요.

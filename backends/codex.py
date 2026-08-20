@@ -32,6 +32,7 @@ from .base import (
     LLMResponse,
     detect_login_error,
     detect_rate_limit,
+    extra_body_ignored_note,
     frames_for_unsupported_video,
     merge_system_prompt,
     tail_lines,
@@ -107,6 +108,9 @@ class CodexBackend(BaseBackend):
 
             prompt = merge_system_prompt(req)
             notes.append(unsupported_note("codex", "temperature", "max_tokens"))
+            extra_body_note = extra_body_ignored_note("codex", req)
+            if extra_body_note:
+                notes.append(extra_body_note)
 
             if streaming:
                 state = {"text": ""}

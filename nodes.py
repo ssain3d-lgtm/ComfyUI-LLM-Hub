@@ -6,7 +6,7 @@ from __future__ import annotations
 import traceback
 
 from .backends import BACKEND_NAMES, get_backend
-from .backends.base import LLMRequest, truncate_debug
+from .backends.base import LLMRequest, parse_extra_body, truncate_debug
 from .backends.lmstudio import list_model_ids
 from .utils import cancel, image_io, presets, stream, video_io
 
@@ -37,8 +37,26 @@ WIDGET_ORDER = [
     "video_max_frames", "stream_view",
     "video_path", "mcp_config", "extra_args",
     "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
-    "openai_base_url", "system_preset",
+    "openai_base_url", "system_preset", "batch_mode", "extra_body",
 ]
+
+# 이미지 배치를 어떻게 다룰지.
+#   all_in_one    : 배치 전체를 한 요청에 넣는다 (지금까지의 동작).
+#   one_per_image : 이미지 한 장씩 따로 호출하고 결과를 이어 붙인다.
+# 데이터셋 캡션처럼 "장당 한 줄" 이 필요한 경우가 all_in_one 으로는 불가능했다 --
+# 40장을 물리면 40장이 한 요청에 다 들어가고 답이 하나만 나왔다.
+BATCH_ALL = "all_in_one"
+BATCH_PER_IMAGE = "one_per_image"
+BATCH_MODES = [BATCH_ALL, BATCH_PER_IMAGE]
+
+# one_per_image 결과를 잇는 구분자. 다운스트림에서 이 문자열로 잘라 쓰라고
+# README 에 적어둔다. 일반 문장에 잘 안 나오는 모양을 골랐다.
+BATCH_SEPARATOR = "\n\n=====\n\n"
+
+# 사용자가 Stop 을 눌렀을 때의 status. 상수로 빼둔 이유: 프론트엔드가 이 접두사
+# ("stopped")를 보고 모니터 본문에 빨갛게 올릴지 정한다. 문구를 고치다 접두사가
+# 바뀌면 화면에서 조용히 사라지므로 테스트가 이 값을 직접 읽어 검사한다.
+STOPPED_STATUS = "stopped - cancelled by user, returning what arrived so far"
 
 
 def _as_text(value) -> str:
@@ -50,6 +68,39 @@ def _as_text(value) -> str:
     (DESIGN N4) 문자열이 아니면 빈 값으로 본다.
     """
     return value.strip() if isinstance(value, str) else ""
+
+
+def _as_number(value, fallback, cast=int):
+    """숫자 위젯 값을 안전하게 받는다 (_as_text 의 숫자판, DESIGN N4).
+
+    위젯 순서가 한 번이라도 어긋났던 워크플로우를 열면 숫자 자리에 문자열이
+    들어온다. int("(auto)") 는 ValueError 를 던지고, 그러면 노드가 통째로
+    죽는다 -- .strip() 에서 죽던 것과 똑같은 사고다.
+    """
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _batch_status(statuses, total: int) -> str:
+    """one_per_image 의 장별 상태를 한 줄로 요약한다.
+
+    실패한 장이 하나라도 있으면 ok 라고 하지 않는다 -- 40장 중 3장이 조용히
+    빈 문자열이 되면 다운스트림이 그대로 저장해버린다.
+    """
+    if len(statuses) < total:
+        return (
+            f"stopped - {len(statuses)}/{total} images done, "
+            "returning what arrived so far"
+        )
+    stopped = [s for s in statuses if s.startswith("stopped")]
+    if stopped:
+        return f"{stopped[0]} ({total} images)"
+    failed = [s for s in statuses if not s.startswith("ok")]
+    if failed:
+        return f"error: {len(failed)}/{total} images failed - {failed[0]}"
+    return f"ok - {total} images"
 
 
 def _ls_default(key, fallback):
@@ -205,6 +256,22 @@ class LLMHubGenerate:
                                "system_prompt box above with the saved text. The pencil "
                                "button on the node title bar opens a larger window for "
                                "writing, pasting and saving presets."}),
+                # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
+                "batch_mode": (BATCH_MODES, {
+                    "tooltip": "How to handle an image batch. all_in_one = every image "
+                               "goes into a single request (one answer). one_per_image = "
+                               "one request per image, results joined by a '=====' line, "
+                               "in the same order as the batch — this is what you want for "
+                               "captioning a dataset. one_per_image costs N calls, so with "
+                               "the CLI backends it is N times the price and N cold starts. "
+                               "Ignored when there is a video input or only one image."}),
+                "extra_body": ("STRING", {"default": "", "multiline": True,
+                    "tooltip": "[lmstudio/openai_compat only] Extra JSON fields merged into "
+                               "the request body — the HTTP counterpart of extra_args. "
+                               'Example: {"top_p": 0.9, "response_format": {"type": '
+                               '"json_object"}}. Invalid JSON stops the run with an error '
+                               "instead of being ignored. 'messages' and 'stream' are built "
+                               "by the node and cannot be overridden."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -256,6 +323,8 @@ class LLMHubGenerate:
         mcp_config="",
         extra_args="",
         system_preset=presets.PRESET_NONE,
+        batch_mode=BATCH_ALL,
+        extra_body="",
         unique_id=None,
     ):
         # 노드는 어떤 경우에도 예외를 밖으로 던지지 않는다 (DESIGN N4, §5-3).
@@ -265,6 +334,23 @@ class LLMHubGenerate:
         cancel.begin(unique_id)
         try:
             workspace_dir = _as_text(workspace_dir)
+
+            # extra_body 는 조용히 버리지 않는다. 잘못 적었으면 아무 일도 하기
+            # 전에 멈춰서 그렇게 말해준다 -- extra_args 가 HTTP 백엔드에서 debug
+            # 한 줄만 남기고 사라지던 것이 이 위젯을 만든 이유다.
+            # 이미지를 저장하기 전에 본다. 40장짜리 배치를 다 써놓고 JSON 오타로
+            # 끝내면 그 쓰기가 전부 헛일이다.
+            extra_body_dict, extra_body_error = parse_extra_body(_as_text(extra_body))
+            if extra_body_error:
+                early = stream.make_emitter(
+                    node_id=unique_id, enabled=(stream_view != "off")
+                )
+                early.finish(status=extra_body_error, text="")
+                return {
+                    "ui": {"text": [""], "llmhub_status": [extra_body_error]},
+                    "result": ("", extra_body_error, _as_text(extra_body)),
+                }
+
             image_paths = []
             video_paths = []
             media_notes = []
@@ -304,57 +390,101 @@ class LLMHubGenerate:
             elif backend == "claude" and claude_model and claude_model != AUTO_MODEL:
                 chosen_model = claude_model
 
-            req = LLMRequest(
-                backend=backend,
-                model=chosen_model,
-                system_prompt=system_prompt or "",
-                user_prompt=prompt or "",
-                image_paths=image_paths,
-                video_paths=video_paths,
-                video_max_frames=int(video_max_frames),
-                workspace_dir=workspace_dir,
-                file_access=bool(file_access),
-                mcp_config=_as_text(mcp_config),
-                temperature=float(temperature),
-                max_tokens=int(max_tokens),
-                timeout_s=int(timeout_sec),
-                extra_args=_as_text(extra_args),
-                base_url_override=_as_text(openai_base_url),
-                ttl_sec=int(lmstudio_ttl_sec),
-                unload_after=bool(lmstudio_unload_after),
-                emitter=emitter,
+            # 이미지 배치를 장별로 쪼갤지 결정한다.
+            # 비디오가 있으면 쪼개지 않는다 -- 프레임들은 한 영상의 조각이라
+            # 따로따로 물어보면 의미가 무너진다.
+            per_image = (
+                batch_mode == BATCH_PER_IMAGE
+                and len(image_paths) > 1
+                and not video_paths
             )
+            runs = [[path] for path in image_paths] if per_image else [image_paths]
 
             impl = get_backend(backend)
-            # openai_compat 만 노드에서 주소를 갈아탈 수 있다.
-            if hasattr(impl, "apply_base_url"):
-                impl.apply_base_url(req.base_url_override)
-            response = impl.generate(req)
+            texts, statuses, run_debug = [], [], []
+            total_duration = 0.0
+
+            for index, run_images in enumerate(runs):
+                if per_image:
+                    # 장 사이마다 확인한다. 40장짜리 배치에서 Stop 이 안 들으면
+                    # 멈출 방법이 없다.
+                    if cancel.is_stopped(unique_id):
+                        break
+                    emitter.set_status(f"{backend} image {index + 1}/{len(runs)}...")
+
+                req = LLMRequest(
+                    backend=backend,
+                    model=chosen_model,
+                    system_prompt=system_prompt or "",
+                    user_prompt=prompt or "",
+                    image_paths=run_images,
+                    video_paths=video_paths,
+                    video_max_frames=_as_number(video_max_frames, 8),
+                    workspace_dir=workspace_dir,
+                    file_access=bool(file_access),
+                    mcp_config=_as_text(mcp_config),
+                    temperature=_as_number(temperature, 0.7, float),
+                    max_tokens=_as_number(max_tokens, 2048),
+                    timeout_s=_as_number(timeout_sec, 300),
+                    seed=_as_number(seed, 0),
+                    extra_args=_as_text(extra_args),
+                    extra_body=extra_body_dict,
+                    base_url_override=_as_text(openai_base_url),
+                    ttl_sec=_as_number(lmstudio_ttl_sec, 300),
+                    unload_after=bool(lmstudio_unload_after),
+                    emitter=emitter,
+                )
+
+                # openai_compat 만 노드에서 주소를 갈아탈 수 있다.
+                if hasattr(impl, "apply_base_url"):
+                    impl.apply_base_url(req.base_url_override)
+                response = impl.generate(req)
+
+                # 실패한 장도 빈 문자열로 자리를 채운다. 안 그러면 결과의 n번째가
+                # 이미지의 n번째와 어긋나 캡션이 엉뚱한 그림에 붙는다.
+                texts.append(response.text or "")
+                statuses.append(response.status)
+                total_duration += response.duration_s
+                if per_image:
+                    run_debug.append(f"[{index + 1}] {response.status}")
+                if response.raw_debug:
+                    run_debug.append(response.raw_debug)
+
+            if per_image:
+                # 중간에 멈췄으면 남은 자리를 채워 순서를 유지한다.
+                texts += [""] * (len(runs) - len(texts))
+                text_out = BATCH_SEPARATOR.join(texts)
+                status_out = _batch_status(statuses, len(runs))
+            else:
+                text_out = texts[0] if texts else ""
+                status_out = statuses[0] if statuses else "error: the backend returned nothing"
 
             # 백엔드마다 중지가 다른 모양으로 끝난다(SSE 중단 / 프로세스 사망 →
             # "종료 코드 -1" 등). 사용자가 누른 것은 오류가 아니므로 여기 한 곳에서
             # 통일해 말해준다. 받은 데까지는 그대로 둔다.
-            if cancel.is_stopped(unique_id):
-                response.status = "stopped - cancelled by user, returning what arrived so far"
+            if cancel.is_stopped(unique_id) and not status_out.startswith("stopped"):
+                status_out = STOPPED_STATUS
 
-            emitter.finish(status=response.status, text=response.text or emitter.text)
+            emitter.finish(status=status_out, text=text_out or emitter.text)
 
             debug_parts = list(media_notes)
             if image_paths:
                 debug_parts.append(f"images: {len(image_paths)} saved -> {image_paths[0]}")
+            if per_image:
+                debug_parts.append(
+                    f"batch_mode=one_per_image: {len(runs)} images -> {len(runs)} calls, "
+                    f"results joined by the '=====' line"
+                )
             if video_paths:
                 debug_parts.append(f"video: {video_paths[0]}")
-            debug_parts.append(f"backend={backend} duration={response.duration_s:.1f}s")
-            if response.raw_debug:
-                debug_parts.append(response.raw_debug)
-
-            text_out = response.text or ""
+            debug_parts.append(f"backend={backend} duration={total_duration:.1f}s")
+            debug_parts.extend(run_debug)
             debug_out = truncate_debug("\n".join(p for p in debug_parts if p))
             return {
                 # ui 는 노드에 표시되고 워크플로우에 저장된다.
-                "ui": {"text": [text_out], "llmhub_status": [response.status]},
+                "ui": {"text": [text_out], "llmhub_status": [status_out]},
                 # result 는 그대로 아래 노드로 흐른다(터미널 노드가 되지 않게).
-                "result": (text_out, response.status, debug_out),
+                "result": (text_out, status_out, debug_out),
             }
 
         except Exception as exc:

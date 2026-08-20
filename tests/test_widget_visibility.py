@@ -309,5 +309,194 @@ class TestMonitorPanel(unittest.TestCase):
         self.assertIn("stopPropagation", body)
 
 
+class TestFailureIsVisible(unittest.TestCase):
+    """결과 없이 끝났을 때 사용자가 이유를 볼 수 있어야 한다.
+
+    상태 줄(.llmhub-status)은 한 줄로 잘린다 -- 바로 옆 TestMonitorPanel 의
+    test_status_truncates_instead_of_pushing_buttons 가 그렇게 되도록 지키고
+    있다. 그래서 실패 사유를 거기에만 넣으면 69자짜리 메시지가 잘려나가고,
+    본문은 빈 채로 남아 "아무 일도 안 일어났다" 처럼 보인다.
+
+    실측(2026-08-16): file_access 를 켜고 workspace_dir 을 비운 채 세 번
+    연속 실행했는데 화면에 아무 것도 안 나왔다. 원인은 서버의 /history 를
+    뒤져서야 나왔다 -- 사용자가 할 수 있는 일이 아니다.
+    """
+
+    def setUp(self):
+        self.javascript = _javascript()
+
+    def _promotion_pattern(self):
+        """JS 의 noticeFor 판정식을 그대로 파이썬 정규식으로 가져온다."""
+        found = re.search(
+            r"return /\^\(([^)]+)\)\\b/i\.test\(text\)", self.javascript
+        )
+        self.assertIsNotNone(found, "noticeFor 의 판정식을 못 읽었다 — 구조가 바뀌었나?")
+        return re.compile(r"^(" + found.group(1) + r")\b", re.I)
+
+    def test_real_failure_text_is_promoted_to_the_body(self):
+        """파이썬이 실제로 만드는 문구로 판정한다.
+
+        문구 쪽을 고치면서 접두사를 바꾸면 화면에서 조용히 사라진다.
+        그때 여기서 걸린다.
+        """
+        base_mod = importlib.import_module(f"{_PACK_NAME}.backends.base")
+        req = base_mod.LLMRequest("lmstudio", "", "", "안녕", file_access=True,
+                                  workspace_dir="")
+        message = base_mod.validate_workspace(req)
+        self.assertTrue(message, "이 설정은 실패해야 한다(전제가 깨졌다)")
+        self.assertRegex(message, self._promotion_pattern())
+
+    def test_user_stop_is_promoted_too(self):
+        """중단도 빈 화면과 구별되어야 한다. 문구는 nodes.py 에서 가져온다.
+
+        예전에는 소스를 정규식으로 긁었는데, 대입 변수 이름을 바꾸자 문구를 못
+        찾고 테스트가 깨졌다(문구 자체는 멀쩡했다). 상수를 직접 읽는다.
+        """
+        self.assertRegex(nodes_mod.STOPPED_STATUS, self._promotion_pattern())
+
+    def test_batch_statuses_are_promoted_too(self):
+        """one_per_image 요약 문구도 같은 규칙을 지켜야 한다.
+
+        40장 중 3장이 실패했는데 화면이 조용하면, 빈 캡션 3개가 그대로 저장된다.
+        """
+        pattern = self._promotion_pattern()
+        failed = nodes_mod._batch_status(["ok", "error: boom", "ok"], 3)
+        self.assertRegex(failed, pattern)
+        halted = nodes_mod._batch_status(["ok"], 3)
+        self.assertRegex(halted, pattern)
+        # 전부 성공한 경우는 올리면 안 된다 — 본문에 크게 뜨면 답으로 읽힌다.
+        self.assertNotRegex(nodes_mod._batch_status(["ok", "ok"], 2), pattern)
+
+    def test_success_is_not_promoted(self):
+        """"ok" 를 본문에 크게 써두면 그게 모델이 낸 답처럼 보인다."""
+        pattern = self._promotion_pattern()
+        for status in ("ok", "", "Done", "Generating…"):
+            self.assertNotRegex(status, pattern, f"{status!r} 를 본문에 올리면 안 된다")
+
+    def test_notice_is_not_mistaken_for_an_answer(self):
+        """색이 같으면 사용자는 실패 문구를 답으로 읽는다."""
+        self.assertIn(".llmhub-body.llmhub-notice", self.javascript)
+
+    def test_notice_does_not_leak_into_the_next_run(self):
+        """지난 실행의 붉은 문구가 남으면 이번 결과가 실패처럼 보인다."""
+        self.assertIn("this.lastIsNotice = false", self.javascript)  # clear()
+        self.assertIn("control.lastIsNotice = false", self.javascript)  # 본문 도착 시
+
+
+class TestConnectButton(unittest.TestCase):
+    """LM Studio 모델 목록 재조회 (타이틀 바의 ⟳ Connect).
+
+    ComfyUI 가 LM Studio 보다 먼저 뜨면 lmstudio_model 목록이 "(auto)" 하나로
+    굳는다. 사용자에게 보이는 증상은 "드롭다운이 안 열린다" 뿐이라 원인을 알
+    길이 없다 — 실제로 로그를 뒤져서야 찾았다. 여기서 그 복구 경로를 지킨다.
+    """
+
+    def setUp(self):
+        self.javascript = _javascript()
+        self.code = "\n".join(
+            line.split("//", 1)[0] for line in self.javascript.splitlines()
+        )
+
+    def _body(self, declaration):
+        after = self.javascript.split(declaration, 1)[1]
+        return after.split("\n}", 1)[0]
+
+    def test_auto_model_constant_matches_python(self):
+        """JS 와 nodes.py 가 다른 문자열을 쓰면 "목록이 비었다" 판정이 깨진다.
+
+        조용히 깨진다는 게 문제다 -- 버튼은 "1 models" 라고 자랑스럽게 답하고,
+        정작 목록에는 (auto) 하나뿐이다.
+        """
+        found = re.search(r'const AUTO_MODEL = "([^"]+)"', self.javascript)
+        self.assertIsNotNone(found, "JS 에서 AUTO_MODEL 을 못 읽었다")
+        self.assertEqual(found.group(1), nodes_mod.AUTO_MODEL)
+
+    def test_target_widget_actually_exists(self):
+        """MODEL_WIDGET 이름에 오타가 나면 아무 일도 안 일어난다(에러도 없이)."""
+        found = re.search(r'const MODEL_WIDGET = "([^"]+)"', self.javascript)
+        self.assertIsNotNone(found, "JS 에서 MODEL_WIDGET 을 못 읽었다")
+        spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()
+        names = set(spec.get("required", {})) | set(spec.get("optional", {}))
+        self.assertIn(found.group(1), names)
+
+    def test_no_new_server_route(self):
+        """ComfyUI 코어의 /object_info 를 다시 받는다.
+
+        파이썬에 라우트를 추가하면 이 기능을 쓰려고 ComfyUI 를 재시작해야 한다.
+        고치려는 증상 자체가 "재시작 순서" 문제인데 그건 앞뒤가 안 맞는다.
+        """
+        self.assertIn("/object_info/${NODE_NAME}", self.javascript)
+        self.assertNotIn("/llmhub/models", self.javascript)
+
+    def test_selected_model_is_never_reset(self):
+        """목록만 갈아끼우고 고른 값은 건드리지 않는다.
+
+        목록에 없는 이름이어도 파이썬의 VALIDATE_INPUTS 가 통과시키므로 실행에는
+        지장이 없다. 반대로 여기서 (auto) 로 되돌리면 사용자가 골라둔 모델이
+        조용히 바뀐다 -- 그게 목록이 비어 있는 것보다 나쁘다.
+        """
+        body = self._body("function applyModelList")
+        self.assertIn("options.values = values", body)
+        # `.values =` 는 걸리지 않는다(뒤에 s 가 오므로 \s*= 와 안 맞는다).
+        self.assertEqual(
+            re.findall(r"\.value\s*=(?!=)", body), [], "고른 값을 덮어쓰고 있다"
+        )
+
+    def test_every_node_is_updated_not_just_the_clicked_one(self):
+        """목록은 전역이다. 누른 노드만 고치면 나머지는 낡은 채로 남는다."""
+        body = self._body("function applyModelList")
+        self.assertIn("app.graph?._nodes", body)
+
+    def test_one_request_even_with_many_nodes(self):
+        """노드가 5개라고 5번 물어보면, LM Studio 가 꺼져 있을 때 그만큼 멎는다."""
+        body = self._body("function fetchModelList")
+        self.assertIn("if (modelFetchInFlight) return modelFetchInFlight", body)
+
+    def test_auto_refresh_gives_up_after_one_try(self):
+        """LM Studio 를 아예 안 쓰는 사람이 페이지를 열 때마다 멎으면 안 된다."""
+        body = self._body("function maybeAutoRefresh")
+        self.assertIn("if (autoRefreshTried) return", body)
+        self.assertIn("autoRefreshTried = true", body)
+
+    def test_empty_list_is_not_reported_as_success(self):
+        """LM Studio 가 꺼져 있어도 /object_info 는 200 을 준다.
+
+        목록만 비어서 온다. 그래서 "응답 없음" 은 예외로 안 잡히고, (auto) 를
+        걸러낸 개수로 판별해야 한다.
+        """
+        body = self._body("function refreshModels")
+        self.assertIn("v !== AUTO_MODEL", body)
+
+    def test_result_is_shown_without_hovering(self):
+        """아이콘 버튼이라 라벨을 바꿔서 결과를 알릴 자리가 없다.
+
+        그래서 호버 설명 자리를 빌려 쓰는데, 방금 누른 사람은 마우스를 그 위에
+        올리고 있지 않을 수 있다. notice 가 호버보다 우선해야 하는 이유다.
+        """
+        body = self._body("function drawTitleButtons")
+        self.assertIn("r.spec.notice?.(node)", body)
+        # notice 가 먼저, 호버는 그 다음
+        self.assertLess(body.index("if (notice)"), body.index("else if (hover"))
+
+    def test_button_only_appears_for_lmstudio(self):
+        """다른 백엔드에서는 눌러도 의미가 없다(하는 일이 LM Studio 조회뿐)."""
+        spec = self.javascript.split('key: "connect"', 1)[1].split("},", 1)[0]
+        self.assertIn("visible: isLmStudio", spec)
+
+    def test_hidden_button_is_also_unclickable(self):
+        """그리기와 클릭 판정이 갈리면 "안 보이는데 눌리는" 자리가 생긴다.
+
+        둘 다 buttonRects 를 쓰므로, 거르는 곳이 거기 하나여야 한다.
+        """
+        body = self._body("function buttonRects")
+        self.assertIn("spec.visible?.(node) !== false", body)
+        for func in ("function drawTitleButtons", "function hitButton"):
+            self.assertIn("buttonRects(node)", self._body(func))
+
+    def test_right_click_menu_survives_as_a_fallback(self):
+        """타이틀 바 버튼과 같은 이유 -- onMouseDown 이 안 불리는 버전이 있다."""
+        self.assertIn("Refresh LM Studio models", self.javascript)
+
+
 if __name__ == "__main__":
     unittest.main()

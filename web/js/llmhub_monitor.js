@@ -17,6 +17,10 @@ const VERSION = "1.1.0";
 // utils/presets.py 의 PRESET_NONE 과 같은 값이어야 한다.
 const PRESET_NONE = "(none)";
 
+// nodes.py 의 AUTO_MODEL 과 같은 값이어야 한다. 목록에 이것밖에 없다는 것은
+// LM Studio 조회가 실패했다는 뜻이라, 여기서는 "비었다" 의 판정 기준이 된다.
+const AUTO_MODEL = "(auto)";
+
 // 패널은 노드 객체에 직접 붙인다.
 // onNodeCreated 시점에는 node.id 가 아직 -1 이라(그래프 추가 시 배정됨)
 // id 를 키로 Map 에 넣어두면 이벤트의 실제 id 와 영원히 매칭되지 않는다.
@@ -178,6 +182,16 @@ async function copyToClipboard(text) {
 // 모니터 창 높이. stream_view=off 로 숨길 때 되돌릴 값이라 모듈 범위에 둔다.
 const PANEL_HEIGHT = 240;
 
+// 결과 없이 끝났을 때 본문에 대신 적을 문장.
+//
+// 아무 상태나 옮기지는 않는다 -- "ok" 를 본문에 크게 써두면 그게 답처럼 보인다.
+// 실패와 사용자 중단만 옮긴다. 그 둘이야말로 빈 화면과 구별되어야 하는 것들이다.
+function noticeFor(status, done) {
+  if (!done) return "";
+  const text = String(status || "").trim();
+  return /^(error|stopped)\b/i.test(text) ? text : "";
+}
+
 function createPanel(node) {
   const root = document.createElement("div");
   root.className = "llmhub-monitor";
@@ -242,8 +256,12 @@ function createPanel(node) {
   const control = {
     root,
     lastText: "",
+    // lastText 가 결과가 아니라 실패 사유일 때 true. 색을 다르게 칠하려고 둔다 --
+    // 붉은 글씨가 아니면 사용자는 이걸 모델이 낸 답으로 읽는다.
+    lastIsNotice: false,
     render(text, mode) {
       bodyEl.classList.remove("llmhub-thinking");
+      bodyEl.classList.toggle("llmhub-notice", !!this.lastIsNotice);
       if (mode === "markdown") {
         bodyEl.innerHTML = renderMarkdown(text || "");
       } else {
@@ -255,6 +273,7 @@ function createPanel(node) {
       // 사고 과정은 항상 원문 그대로 흐리게. 마크다운으로 렌더하면 답처럼 보여서
       // 어느 쪽이 최종 결과인지 헷갈린다.
       bodyEl.classList.add("llmhub-thinking");
+      bodyEl.classList.remove("llmhub-notice");
       bodyEl.textContent = text || "";
       if (stick) bodyEl.scrollTop = bodyEl.scrollHeight;
     },
@@ -278,8 +297,10 @@ function createPanel(node) {
     },
     clear() {
       this.lastText = "";
+      this.lastIsNotice = false;
       bodyEl.textContent = "";
       bodyEl.classList.remove("llmhub-thinking");
+      bodyEl.classList.remove("llmhub-notice");
       stick = true;
     },
   };
@@ -365,6 +386,8 @@ const BACKEND_ONLY = {
   max_tokens: ["lmstudio", "openai_compat"],
   mcp_config: ["claude"],
   video_max_frames: ["lmstudio", "claude", "codex", "openai_compat"],
+  // extra_body 는 HTTP payload 에 합치는 물건이라 CLI 3종에는 합칠 자리가 없다.
+  extra_body: ["lmstudio", "openai_compat"],
 };
 
 // 접었을 때 숨는 위젯. 여기 없는 것 = 항상 보이는 것이다:
@@ -375,6 +398,7 @@ const ADVANCED = [
   "model", "file_access", "workspace_dir", "temperature", "max_tokens",
   "timeout_sec", "seed", "video_max_frames", "stream_view", "video_path",
   "mcp_config", "extra_args", "lmstudio_ttl_sec", "lmstudio_unload_after",
+  "batch_mode", "extra_body",
   // INPUT_TYPES 에 없는 이름이다. seed 에 control_after_generate:True 를 주면
   // 프론트엔드가 짝꿍 위젯을 하나 더 만들어 붙인다. seed 만 숨기면 이게 홀로 남아
   // "고급을 접었는데 웬 randomize 줄이 남아 있는" 모양이 된다.
@@ -691,6 +715,116 @@ function refreshPresetWidget(node, presets, select) {
 }
 
 // --------------------------------------------------------------------------
+// LM Studio 모델 목록 재조회
+// --------------------------------------------------------------------------
+// lmstudio_model 드롭다운은 파이썬의 INPUT_TYPES 가 LM Studio 를 조회해서 만든다.
+// 그래서 ComfyUI 가 LM Studio 보다 먼저 뜨면 목록이 "(auto)" 하나로 굳고,
+// 페이지를 새로 열기 전까지 그대로 남는다. 실제로 겪은 증상이고 로그에도 남는다:
+//   [LLM Hub] Could not fetch the LM Studio model list (... ConnectTimeout).
+// 그때 사용자에게 보이는 건 "드롭다운이 안 열린다" 뿐이라 원인을 알 길이 없다.
+//
+// 서버에 새 라우트를 만들지 않는다. ComfyUI 코어의 /object_info 가 요청마다
+// INPUT_TYPES 를 다시 실행하므로, 그것만 다시 받아오면 목록이 갱신된다.
+// 덕분에 이 기능은 파이썬을 건드리지 않고 -- 즉 ComfyUI 재시작 없이 -- 끝난다.
+
+const MODEL_WIDGET = "lmstudio_model";
+const CONNECT_KEY = "_llmhubConnectLabel";
+const CONNECT_TIMER = "_llmhubConnectTimer";
+const CHECKING = "Checking LM Studio…";
+
+// 조회는 페이지 전체에서 한 번에 하나만 나간다. 캔버스에 노드가 5개 있다고
+// 5번 물어볼 이유가 없고, LM Studio 가 꺼져 있으면 한 번에 3초씩 걸린다.
+let modelFetchInFlight = null;
+
+function fetchModelList() {
+  if (modelFetchInFlight) return modelFetchInFlight;
+  modelFetchInFlight = api
+    .fetchApi(`/object_info/${NODE_NAME}`)
+    .then((response) => response.json())
+    .then((data) => {
+      const input = data?.[NODE_NAME]?.input || {};
+      const spec =
+        (input.optional || {})[MODEL_WIDGET] || (input.required || {})[MODEL_WIDGET];
+      const values = spec?.[0];
+      if (!Array.isArray(values)) throw new Error("object_info has no model list");
+      return values;
+    })
+    .finally(() => {
+      modelFetchInFlight = null;
+    });
+  return modelFetchInFlight;
+}
+
+// 목록은 전역이다. 누른 노드만 고치면 나머지 노드는 낡은 채로 남아서
+// "어떤 노드는 되고 어떤 노드는 안 되는" 상태가 된다.
+function applyModelList(values) {
+  for (const node of app.graph?._nodes || []) {
+    if (node.type !== NODE_NAME && node.comfyClass !== NODE_NAME) continue;
+    const widget = node.widgets?.find((w) => w.name === MODEL_WIDGET);
+    if (!widget?.options) continue;
+    widget.options.values = values;
+    // 고른 값은 건드리지 않는다. 목록에 없는 이름이어도 파이썬의 VALIDATE_INPUTS
+    // 가 통과시키므로 실행에는 지장이 없고, 여기서 (auto) 로 되돌리면 사용자가
+    // 골라둔 모델이 조용히 바뀐다 -- 그게 목록이 비는 것보다 나쁘다.
+    node.setDirtyCanvas?.(true, true);
+  }
+  return values;
+}
+
+// 버튼 라벨을 잠깐 결과로 바꿨다가 되돌린다. 별도 알림 UI 를 만들지 않는 이유는
+// 사용자가 방금 누른 그 자리에 답이 나오는 게 가장 짧은 경로이기 때문이다.
+function setConnectLabel(node, text, holdMs) {
+  node[CONNECT_KEY] = text;
+  node.setDirtyCanvas?.(true, true);
+  if (node[CONNECT_TIMER]) clearTimeout(node[CONNECT_TIMER]);
+  node[CONNECT_TIMER] = holdMs
+    ? setTimeout(() => {
+        node[CONNECT_KEY] = null;
+        node[CONNECT_TIMER] = null;
+        node.setDirtyCanvas?.(true, true);
+      }, holdMs)
+    : null;
+}
+
+function refreshModels(node) {
+  if (node[CONNECT_KEY] === CHECKING) return; // 연타 무시
+  setConnectLabel(node, CHECKING, 0);
+  fetchModelList()
+    .then(applyModelList)
+    .then((values) => {
+      const found = values.filter((v) => v !== AUTO_MODEL).length;
+      if (found) {
+        setConnectLabel(node, `Found ${found} model${found > 1 ? "s" : ""}`, 3000);
+        return;
+      }
+      // LM Studio 가 꺼져 있어도 /object_info 는 200 을 준다 -- 목록만 비어서
+      // 온다. 그래서 "응답 없음" 은 예외가 아니라 여기서 판별해야 한다.
+      // 파이썬의 list_model_ids 캐시가 10초라 즉시 다시 눌러도 같은 답이 온다.
+      setConnectLabel(node, "No models — is the LM Studio server on? (retry in 10s)", 4000);
+    })
+    .catch(() => setConnectLabel(node, "Could not reach ComfyUI", 4000));
+}
+
+// 목록이 "(auto)" 하나뿐이면 ComfyUI 가 LM Studio 보다 먼저 뜬 것이다.
+// 페이지당 딱 한 번 조용히 다시 받아온다. 실패해도 재시도하지 않는다 --
+// LM Studio 를 아예 안 쓰는 사람이 페이지를 열 때마다 멎으면 안 된다.
+let autoRefreshTried = false;
+
+function maybeAutoRefresh(node) {
+  if (autoRefreshTried) return;
+  const values = node.widgets?.find((w) => w.name === MODEL_WIDGET)?.options?.values;
+  if (!Array.isArray(values) || values.length > 1) return;
+  autoRefreshTried = true;
+  fetchModelList()
+    .then(applyModelList)
+    .catch(() => {});
+}
+
+function isLmStudio(node) {
+  return node.widgets?.find((w) => w.name === "backend")?.value === "lmstudio";
+}
+
+// --------------------------------------------------------------------------
 // 고급 옵션 버튼 (타이틀 바 오른쪽)
 // --------------------------------------------------------------------------
 // 우클릭 메뉴는 있는 줄도 모른다. 그래서 눈에 보이는 버튼을 하나 그린다.
@@ -715,7 +849,10 @@ const BUTTON_MARGIN = 6;
 const BUTTON_GAP = 4;
 const HOVER_KEY = "_llmhubBtnHover";
 
-// 오른쪽 끝부터 이 순서로 놓인다.
+// 오른쪽 끝부터 이 순서로 놓인다(= 배열의 앞이 화면의 오른쪽).
+//
+// visible 을 안 쓰면 항상 그린다. Connect 만 이걸 쓰는데, 하는 일이 LM Studio
+// 조회 하나뿐이라 다른 백엔드에서는 눌러도 의미가 없기 때문이다.
 const TITLE_BUTTONS = [
   {
     key: "advanced",
@@ -734,13 +871,27 @@ const TITLE_BUTTONS = [
     active: () => false,
     onClick: (node) => openPromptEditor(node),
   },
+  {
+    key: "connect",
+    visible: isLmStudio,
+    icon: () => "⟳",
+    hint: () => "Refresh LM Studio models",
+    // 누른 직후의 결과를 호버 없이도 잠깐 띄운다. 아이콘 버튼이라 라벨을
+    // 바꿔서 알릴 자리가 없다 -- 대신 호버 설명 자리를 빌려 쓴다.
+    notice: (node) => node[CONNECT_KEY],
+    active: (node) => node[CONNECT_KEY] === CHECKING,
+    onClick: (node) => refreshModels(node),
+  },
 ];
 
 function buttonRects(node) {
   const titleHeight = window.LiteGraph?.NODE_TITLE_HEIGHT ?? 30;
   const y = -titleHeight + (titleHeight - BUTTON_HEIGHT) / 2;
   let right = (node.size?.[0] ?? 0) - BUTTON_MARGIN;
-  return TITLE_BUTTONS.map((spec) => {
+  // 숨긴 버튼은 자리도 차지하지 않는다. 그리기(drawTitleButtons)와 클릭 판정
+  // (hitButton)이 둘 다 이 함수를 쓰므로, 여기서 한 번 걸러내면 "안 보이는데
+  // 눌리는" 어긋남이 생길 수 없다.
+  return TITLE_BUTTONS.filter((spec) => spec.visible?.(node) !== false).map((spec) => {
     const rect = { spec, x: right - BUTTON_WIDTH, y, w: BUTTON_WIDTH, h: BUTTON_HEIGHT };
     right -= BUTTON_WIDTH + BUTTON_GAP;
     return rect;
@@ -768,7 +919,10 @@ function drawTitleButtons(node, ctx) {
   ctx.textBaseline = "middle";
   for (const r of buttonRects(node)) {
     const hover = hovered === r.spec.key;
-    if (hover) tooltip = r;
+    // notice 는 방금 누른 결과라 호버보다 우선한다.
+    const notice = r.spec.notice?.(node);
+    if (notice) tooltip = { rect: r, text: notice };
+    else if (hover && !tooltip) tooltip = { rect: r, text: r.spec.hint(node) };
     ctx.beginPath();
     // roundRect 는 비교적 최근 API 라 없을 수 있다. 없으면 각진 사각형으로 떨어진다.
     if (ctx.roundRect) ctx.roundRect(r.x, r.y, r.w, r.h, 4);
@@ -782,14 +936,13 @@ function drawTitleButtons(node, ctx) {
     ctx.fillStyle = "#e8e8e8";
     ctx.fillText(r.spec.icon(node), r.x + r.w / 2, r.y + r.h / 2);
   }
-  if (tooltip) drawButtonHint(node, ctx, tooltip);
+  if (tooltip) drawButtonHint(ctx, tooltip.rect, tooltip.text);
   ctx.restore();
 }
 
 // 아이콘만으로는 무슨 버튼인지 알 수 없다. 마우스를 올린 동안 본문 위쪽에
 // 설명을 그린다 -- 캔버스라 HTML 툴팁을 못 쓴다.
-function drawButtonHint(node, ctx, rect) {
-  const text = rect.spec.hint(node);
+function drawButtonHint(ctx, rect, text) {
   ctx.font = "11px sans-serif";
   const padding = 6;
   const width = ctx.measureText(text).width + padding * 2;
@@ -841,6 +994,7 @@ app.registerExtension({
       if (body) {
         // 본문이 한 글자라도 오면 즉시 그쪽으로 갈아탄다. 사고 과정은 답이 아니므로
         // 답이 나오기 시작하면 더 보여줄 이유가 없다.
+        control.lastIsNotice = false; // 지난 실행의 실패 문구 색이 남지 않게
         control.lastText = body;
         control.render(body, mode);
         control.setStatus(data.status, data.elapsed, data.done);
@@ -850,8 +1004,15 @@ app.registerExtension({
         control.renderThinking(thinking);
         control.setStatus("Thinking…", data.elapsed, false);
       } else {
-        control.lastText = body;
-        control.render(body, mode);
+        // 본문 없이 끝났을 때가 진짜 문제다. 상태 줄은 한 줄로 잘리므로
+        // (.llmhub-status 의 ellipsis) 사용자 눈에는 "아무 일도 안 일어났다" 로
+        // 보인다. 실제로 겪은 증상이다 -- workspace_dir 이 비어서 세 번 연속
+        // 실패했는데 화면에는 끝까지 아무 것도 안 나왔고, 원인은 서버의 실행
+        // 이력을 파서야 나왔다. 실패 사유는 본문에도 적는다.
+        const notice = body ? "" : noticeFor(data.status, data.done);
+        control.lastIsNotice = !!notice;
+        control.lastText = body || notice;
+        control.render(control.lastText, mode);
         control.setStatus(data.status, data.elapsed, data.done);
       }
     });
@@ -900,6 +1061,10 @@ app.registerExtension({
       // 이 위젯은 화면 전용이다 -- 생성 시점에 다시 합치면 같은 문장이 두 번
       // 들어간다(그래서 파이썬 쪽은 이 값을 보지 않는다).
       setupPresetLoader(this);
+
+      // ComfyUI 가 LM Studio 보다 먼저 떴으면 모델 목록이 비어 있다. 조용히
+      // 한 번만 다시 받아온다(페이지당 1회, 노드가 몇 개든 요청은 한 번).
+      maybeAutoRefresh(this);
 
       this.size[1] = Math.max(this.size[1], 460);
       return result;
@@ -957,6 +1122,14 @@ app.registerExtension({
         content: shown ? "Hide advanced options" : "Show advanced options",
         callback: () => toggleAdvanced(this),
       });
+      // 타이틀 바 버튼과 같은 이유로 여기에도 둔다 -- onMouseDown 이 안 불리는
+      // 프론트엔드 버전에서도 목록을 되살릴 길이 남아 있어야 한다.
+      if (isLmStudio(this)) {
+        options.push({
+          content: "Refresh LM Studio models",
+          callback: () => refreshModels(this),
+        });
+      }
       return result;
     };
 
@@ -1061,6 +1234,12 @@ style.textContent = `
 .llmhub-body.llmhub-thinking {
   opacity: 0.55;
   font-style: italic;
+  white-space: pre-wrap;
+}
+
+/* 실패 사유도 답이 아니다 — 색으로 갈라놓지 않으면 모델이 낸 답으로 읽힌다. */
+.llmhub-body.llmhub-notice {
+  color: #ff9a9a;
   white-space: pre-wrap;
 }
 

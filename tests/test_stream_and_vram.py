@@ -297,16 +297,44 @@ class TestLMStudioVram(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_missing_lms_is_explained_not_fatal(self):
+        """lms 가 없어도 생성은 성공하고, 즉시 언로드를 왜 못 했는지 알려준다.
+
+        cli_paths 에 가짜 경로를 넣는 방식으로는 이 상황을 만들 수 없다.
+        resolve_cli 는 shutil.which 를 먼저 보고(utils/proc.py, 의도된 우선순위),
+        찾으면 config 를 아예 안 읽는다. 그래서 LM Studio 가 깔린 PC 에서는
+        진짜 lms 가 잡혀 이 테스트가 실패했고 -- 더 나쁘게는, 사용자의 실제
+        LM Studio 에 `lms unload` 를 날리고 있었다. 실측(2026-08-16, Windows):
+            lms -> C:/Users/<user>/.lmstudio/bin/lms  이므로 config 는 무시됨
+        그래서 "찾지 못했다" 를 config 로 흉내내지 말고 직접 만든다.
+        """
+        proc_mod = importlib.import_module(f"{_PACK_NAME}.utils.proc")
         with MockLMStudio(script=[{"content": "안녕"}]) as server:
             backend = lmstudio_mod.LMStudioBackend(
-                config={"lmstudio": {"base_url": server.base_url},
-                        "cli_paths": {"lms": "definitely-not-a-real-lms-xyz"}}
+                config={"lmstudio": {"base_url": server.base_url}}
             )
-            resp = backend.generate(
-                LLMRequest("lmstudio", "", "", "안녕", unload_after=True)
-            )
+            with mock.patch.object(
+                proc_mod,
+                "resolve_cli",
+                side_effect=proc_mod.CliNotFoundError("lms not found"),
+            ):
+                resp = backend.generate(
+                    LLMRequest("lmstudio", "", "", "안녕", unload_after=True)
+                )
         self.assertEqual(resp.status, "ok")       # 생성 자체는 성공해야 한다
         self.assertIn("lms CLI", resp.raw_debug)  # 이유를 알려준다
+
+    def test_config_cli_path_cannot_fake_a_missing_cli(self):
+        """위 테스트가 왜 그렇게 생겼는지를 코드로 박아둔다.
+
+        누군가 "cli_paths 에 가짜 경로를 넣으면 되잖아" 라며 되돌리면 여기서
+        걸린다. PATH 우선은 의도된 동작이므로 고칠 대상이 아니다 -- 다만
+        테스트에서 부재를 흉내내는 수단으로는 쓸 수 없다는 뜻이다.
+        """
+        proc_mod = importlib.import_module(f"{_PACK_NAME}.utils.proc")
+        with mock.patch.object(proc_mod.shutil, "which",
+                               side_effect=lambda n: "/real/path/to/" + n):
+            # config 에 아무 쓰레기를 넣어도 PATH 에서 찾은 쪽이 이긴다.
+            self.assertEqual(proc_mod.resolve_cli("lms"), "/real/path/to/lms")
 
     def test_streaming_disabled_when_tools_declared(self):
         """file_access=True 는 tool_calls 조립 문제로 스트리밍하지 않는다."""

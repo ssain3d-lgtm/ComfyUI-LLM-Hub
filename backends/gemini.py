@@ -32,6 +32,7 @@ from .base import (
     LLMResponse,
     detect_login_error,
     detect_rate_limit,
+    extra_body_ignored_note,
     merge_system_prompt,
     stage_media,
     tail_lines,
@@ -109,6 +110,9 @@ class GeminiBackend(BaseBackend):
                 notes.append(f"gemini: passing {len(req.video_paths)} video file(s) natively")
             prompt = _build_prompt(req, staged)
             notes.append(unsupported_note("gemini", "temperature", "max_tokens"))
+            extra_body_note = extra_body_ignored_note("gemini", req)
+            if extra_body_note:
+                notes.append(extra_body_note)
 
             # 프롬프트는 stdin 으로 넣는다(인자 길이 제한 회피).
             if streaming:

@@ -30,6 +30,12 @@ class LLMRequest:
     mcp_config: str = ""  # JSON 파일 경로 또는 ""
     temperature: float = 0.7
     max_tokens: int = 2048
+    # 샘플링 시드. 0 이면 보내지 않는다(= 서버 기본값 = 지금까지의 동작).
+    # HTTP 백엔드만 본다. CLI 3종에는 대응하는 플래그가 없다.
+    seed: int = 0
+    # HTTP 백엔드의 payload 에 그대로 합칠 추가 필드 (extra_args 의 HTTP 판).
+    # nodes.py 에서 JSON 문자열을 파싱해 넘긴다.
+    extra_body: dict = field(default_factory=dict)
     # LM Studio 전용. None = config.json 의 lmstudio 설정을 따름.
     # ttl_sec: 유휴 TTL(초), 0 이면 ttl 을 보내지 않는다.
     # unload_after: 응답 직후 lms unload 로 VRAM 을 비울지.
@@ -238,3 +244,127 @@ def unsupported_note(backend: str, *names: str) -> str:
     if not names:
         return ""
     return f"unsupported: {', '.join(names)} ({backend} CLI does not expose this parameter)"
+
+
+# --- extra_body (HTTP 백엔드용 추가 payload 필드) ----------------------------
+
+# payload 의 뼈대라 사용자가 덮어쓰면 코드가 망가지는 키.
+#   messages : 이 노드가 만든 대화 자체다.
+#   stream   : 스트리밍 여부는 stream_view 위젯과 툴 루프가 결정한다.
+RESERVED_PAYLOAD_KEYS = ("messages", "stream")
+# file_access=True 일 때만 추가로 잠근다. 툴 루프가 자기가 선언한 스키마를
+# 그대로 되받는다는 전제로 돌아가므로, 여기를 바꾸면 루프가 어긋난다.
+RESERVED_WHEN_TOOLS = ("tools", "tool_choice")
+
+
+def extra_body_ignored_note(backend: str, req: LLMRequest) -> str:
+    """CLI 백엔드용 안내. extra_body 는 HTTP payload 에 합치는 물건이라
+    프로세스를 띄우는 백엔드에는 합칠 자리가 없다. 조용히 버리지 않는다."""
+    if not req.extra_body:
+        return ""
+    return (
+        f"{backend}: extra_body is ignored by this CLI backend "
+        "(it has no HTTP payload — use extra_args for CLI flags)"
+    )
+
+
+def parse_extra_body(text: str) -> tuple:
+    """extra_body 위젯의 JSON 문자열을 dict 로 바꾼다.
+
+    반환: (dict, error_message). error_message 가 비어 있지 않으면 실패다.
+
+    조용히 무시하지 않는 이유: extra_args 가 HTTP 백엔드에서 debug 한 줄만
+    남기고 버려지던 것이 이 위젯을 만든 계기다. 사용자가 적은 것이 반영도
+    안 되고 말도 안 해주면 같은 함정을 한 번 더 파는 것이다.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {}, ""
+    import json as _json
+
+    try:
+        parsed = _json.loads(raw)
+    except ValueError as exc:
+        return {}, f"error: extra_body is not valid JSON - {exc}"
+    if not isinstance(parsed, dict):
+        return {}, (
+            "error: extra_body must be a JSON object "
+            f'(got {type(parsed).__name__}). Example: {{"top_p": 0.9}}'
+        )
+    return parsed, ""
+
+
+def merge_extra_body(payload: dict, extra_body: dict, file_access: bool = False) -> list:
+    """extra_body 를 payload 에 합친다. 반환: debug 에 남길 안내 리스트."""
+    if not extra_body:
+        return []
+
+    reserved = set(RESERVED_PAYLOAD_KEYS)
+    if file_access:
+        reserved.update(RESERVED_WHEN_TOOLS)
+
+    applied, rejected = [], []
+    for key, value in extra_body.items():
+        if key in reserved:
+            rejected.append(key)
+            continue
+        payload[key] = value
+        applied.append(key)
+
+    notes = []
+    if applied:
+        notes.append(f"extra_body: applied {', '.join(sorted(applied))}")
+    if rejected:
+        notes.append(
+            "extra_body: ignored "
+            + ", ".join(sorted(rejected))
+            + " (these are built by the node itself)"
+        )
+    return notes
+
+
+# --- usage / cost 표기 통일 -------------------------------------------------
+
+# 백엔드마다 키 이름이 다르다. 확인된 이름만 넣는다(추측 금지, §0-5).
+#   OpenAI 호환  : prompt_tokens / completion_tokens / total_tokens
+#   claude CLI   : input_tokens / output_tokens (+ 캐시 관련 키)
+_USAGE_ALIASES = {
+    "prompt": ("prompt_tokens", "input_tokens"),
+    "completion": ("completion_tokens", "output_tokens"),
+    "total": ("total_tokens",),
+}
+
+
+def format_usage(usage=None, cost_usd=None) -> str:
+    """토큰 사용량/비용을 debug 한 줄로 통일한다.
+
+    아무것도 못 찾으면 빈 문자열을 돌려준다 -- 백엔드마다 주는 것이 달라서,
+    없는 항목을 0 으로 적으면 "0 토큰을 썼다" 는 거짓말이 된다.
+    """
+    parts = []
+    numbers = {}
+    if isinstance(usage, dict):
+        for label, keys in _USAGE_ALIASES.items():
+            for key in keys:
+                value = usage.get(key)
+                if isinstance(value, (int, float)):
+                    numbers[label] = int(value)
+                    break
+        # total 을 안 주는 백엔드가 있어서 둘 다 있으면 직접 더한다.
+        if "total" not in numbers and "prompt" in numbers and "completion" in numbers:
+            numbers["total"] = numbers["prompt"] + numbers["completion"]
+        for label in ("prompt", "completion", "total"):
+            if label in numbers:
+                parts.append(f"{label}={numbers[label]}")
+        # 캐시 토큰은 있을 때만 덧붙인다(claude 만 준다).
+        cached = usage.get("cache_read_input_tokens")
+        if isinstance(cached, (int, float)) and cached:
+            parts.append(f"cached={int(cached)}")
+
+    if isinstance(cost_usd, (int, float)):
+        # 한 번 호출에 $0.0001 단위가 흔해서 소수 4자리까지 적는다.
+        parts.append(f"cost=${cost_usd:.4f}")
+
+    if not parts:
+        return ""
+    return "usage: " + " ".join(parts)

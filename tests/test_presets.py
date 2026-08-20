@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import io
 import json
 import os
 import sys
@@ -88,9 +90,20 @@ class TestBadInput(unittest.TestCase):
     """손으로 고치는 파일이라 깨질 수 있다. 깨져도 노드는 떠야 한다."""
 
     def test_broken_json_yields_empty_list_not_a_crash(self):
+        """깨진 파일을 만나도 노드는 뜨고, 콘솔에 이유를 남긴다.
+
+        stdout 을 삼키는 이유: load_presets 는 여기서 일부러 실패하고
+        "[LLM Hub] could not read system_prompts.json: ..." 를 찍는다. 그대로
+        두면 그 줄이 테스트 출력 맨 끝에 남아서, 돌려본 사람이 자기 프리셋
+        파일이 깨진 줄 알고 확인하러 간다(실제로 그랬다). 삼키는 김에 그 안내가
+        정말 나오는지까지 확인한다 -- 소음이던 것을 검증으로 바꾼다.
+        """
+        printed = io.StringIO()
         with _TempPresets("{{{ 이건 JSON 이 아니다"):
-            self.assertEqual(presets.load_presets(), {})
-            self.assertEqual(presets.preset_names(), ["(none)"])
+            with contextlib.redirect_stdout(printed):
+                self.assertEqual(presets.load_presets(), {})
+                self.assertEqual(presets.preset_names(), ["(none)"])
+        self.assertIn("could not read system_prompts.json", printed.getvalue())
 
     def test_missing_file_yields_empty_list(self):
         with _TempPresets({"presets": []}) as tmp:
