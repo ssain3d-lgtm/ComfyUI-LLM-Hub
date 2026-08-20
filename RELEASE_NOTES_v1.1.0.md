@@ -1,8 +1,65 @@
 Since v1.0.0 one more backend was added, and the friction found by actually running
 this inside ComfyUI has been cleared out. Everything the node shows you is now in
-English, and the test count went from 138 to **293**.
+English, and the test count went from 138 to **350**.
 
 ## New
+
+### Image batches: one caption per image
+
+A batch of images used to go into a **single** request and come back as **one**
+answer, which made the most common job in ComfyUI — captioning a dataset —
+impossible. `batch_mode` picks which behaviour you want.
+
+| `batch_mode` | What happens |
+|---|---|
+| `all_in_one` *(default)* | Every image in one request, one answer |
+| `one_per_image` | One request per image; answers joined by a `=====` line, in batch order |
+
+A failed image keeps its slot as an empty string, so caption *n* still lines up
+with image *n*, and `status` says `error: 2/40 images failed - ...` instead of
+`ok`. Stop is checked between images — a 40-image batch was otherwise
+unstoppable. It costs N calls, so on the three CLIs it is N times the price.
+
+### `extra_body`: JSON output and every other server field
+
+`temperature` and `max_tokens` were the only settings that reached the server.
+`extra_body` merges arbitrary JSON into the request body — the HTTP counterpart
+of `extra_args`:
+
+```json
+{"top_p": 0.9, "response_format": {"type": "json_object"}}
+```
+
+`response_format` is the important one: it turns this node into a generator whose
+output other nodes can parse. **Invalid JSON stops the run** rather than being
+ignored — a setting that quietly does nothing is the problem this widget exists
+to fix. `messages` and `stream` stay under the node's control.
+
+### `seed` actually reaches the server
+
+In ComfyUI a seed means "run it again and get the same thing", and this node had
+that exact control while never sending it. On `lmstudio` / `openai_compat` a
+**non-zero** seed now goes into the request. `0` sends nothing, so a default
+install's requests are unchanged. Since "same seed → same output" could not be
+verified against real hardware, a server that answers 400 with a seed present is
+**retried once without it** — one field never kills a whole generation.
+
+### Token usage and cost in `debug`
+
+```
+usage: prompt=812 completion=140 total=952 cost=$0.0031
+```
+
+The same line from every backend that reports one. Missing figures are omitted
+rather than printed as `0`, because writing `0` would be a lie about what was
+spent. `codex` and `gemini` do not report usage, so the line is simply absent.
+
+### `openai_compat` reaches hosted providers
+
+This already worked and was never documented. Set `OPENAI_COMPAT_API_KEY` (or
+`openai_compat.api_token`) and point `openai_base_url` at any OpenAI-compatible
+service — OpenRouter, DeepSeek, Groq, Together, api.openai.com. **Leave `/v1`
+off the end**; the node appends `/v1/chat/completions` itself.
 
 ### System prompt editor
 
@@ -162,7 +219,7 @@ workflows that are already saved**.
 
 ## Verification
 
-- **313 automated tests** (v1.0.0 had 138), **passing on both Linux and Windows.** CI runs both platforms on every pull request
+- **350 automated tests** (v1.0.0 had 138), **passing on both Linux and Windows.** CI runs both platforms on every pull request
 - To verify without LM Studio, a fake server (including SSE) was written with the standard library
 - claude real-account smoke passed (text / system prompt / file reading / image / video). During the image test the model's attempt to use Bash was **actually blocked** via `permission_denials`
 
@@ -170,7 +227,9 @@ workflows that are already saved**.
 
 - **`openai_compat` is unverified against real hardware** (no Ollama/vLLM/llama.cpp available here)
 - **The lmstudio / codex / gemini real-account smokes are unverified** (they need a login). Please check them with the commands in README §8
-- **CI cannot verify the frontend.** It only runs Python — the editor, the title-bar buttons and the panel hiding have had syntax checking and API review only
+- **CI cannot verify the frontend.** It only runs Python — the editor, the title-bar buttons, the panel hiding and the two new widgets have had syntax checking and API review only
+- **Whether a given server honours `seed`** is unverified. If it does not, results simply are not reproducible; if it rejects the field, the request is retried without it
+- **The `usage` shape from anything other than LM Studio** is unverified. An unrecognised shape prints no line rather than a wrong one
 
 ## Upgrading
 
