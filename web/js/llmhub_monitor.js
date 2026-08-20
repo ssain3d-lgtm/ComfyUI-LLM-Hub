@@ -376,18 +376,23 @@ function applyMonitorVisibility(node, mode) {
 //
 // 숨겨도 값은 그대로 직렬화된다(litegraph 는 위젯을 저장할 때 type 을 보지 않는다).
 // 그래서 required 위젯을 숨겨도 프롬프트에서 빠지지 않는다.
+// ollama / vllm / llamacpp 는 openai_compat 과 같은 구현이라 위젯이 보이는
+// 조건도 같다. 상수로 빼서 펼치고 싶지만 일부러 이름을 다 적는다 --
+// tests/test_widget_visibility.py 가 이 리터럴을 **텍스트로 파싱**해서
+// nodes.py 의 백엔드 목록과 대조하기 때문에, 스프레드를 쓰면 파서가 아무것도
+// 못 읽고 검사가 조용히 통과해버린다.
 const BACKEND_ONLY = {
-  openai_base_url: ["openai_compat"],
+  openai_base_url: ["openai_compat", "ollama", "vllm", "llamacpp"],
   claude_model: ["claude"],
   lmstudio_model: ["lmstudio"],
   lmstudio_ttl_sec: ["lmstudio"],
   lmstudio_unload_after: ["lmstudio"],
-  temperature: ["lmstudio", "openai_compat"],
-  max_tokens: ["lmstudio", "openai_compat"],
+  temperature: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp"],
+  max_tokens: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp"],
   mcp_config: ["claude"],
-  video_max_frames: ["lmstudio", "claude", "codex", "openai_compat"],
+  video_max_frames: ["lmstudio", "claude", "codex", "openai_compat", "ollama", "vllm", "llamacpp"],
   // extra_body 는 HTTP payload 에 합치는 물건이라 CLI 3종에는 합칠 자리가 없다.
-  extra_body: ["lmstudio", "openai_compat"],
+  extra_body: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp"],
 };
 
 // 접었을 때 숨는 위젯. 여기 없는 것 = 항상 보이는 것이다:

@@ -135,9 +135,12 @@ class LLMHubGenerate:
         return {
             "required": {
                 "backend": (BACKEND_NAMES, {
-                    "tooltip": "Which LLM to use. lmstudio/openai_compat = local server, "
-                               "claude/codex/gemini = subscription CLIs. Each backend must "
-                               "already be installed and logged in.",
+                    "tooltip": "Which LLM to use. claude/codex/gemini = subscription CLIs; "
+                               "everything else talks to a local server over HTTP. "
+                               "ollama / vllm / llamacpp are the same backend as "
+                               "openai_compat, just preset to that server's standard port "
+                               "(11434 / 8000 / 8080) so you do not have to type it. "
+                               "Each backend must already be installed and running.",
                 }),
                 "prompt": ("STRING", {"multiline": True, "default": "",
                     "tooltip": "The user prompt. Write what you want done here."}),
@@ -242,11 +245,13 @@ class LLMHubGenerate:
                 # 규칙대로 맨 뒤로 옮긴다. 순서는 WIDGET_ORDER 로 고정한다.
                 "openai_base_url": ("STRING", {
                     "default": "",
-                    "tooltip": "Address of the OpenAI-compatible server. Empty = use "
-                               "openai_compat.base_url from config.json. "
-                               "Ollama http://127.0.0.1:11434 / "
-                               "vLLM http://127.0.0.1:8000 / "
-                               "llama.cpp http://127.0.0.1:8080"}),
+                    "tooltip": "Address of the OpenAI-compatible server. Fill this in only "
+                               "when the server is not at the standard port — for the "
+                               "ollama / vllm / llamacpp backends it is already set "
+                               "(11434 / 8000 / 8080), and for openai_compat an empty box "
+                               "uses openai_compat.base_url from config.json. "
+                               "Leave '/v1' off the end; the node appends "
+                               "/v1/chat/completions itself."}),
                 #
                 # system_prompt 바로 밑에 두는 편이 자연스럽지만 그렇게 못 한다.
                 # 위젯 순서가 곧 widgets_values 의 순서라, 중간에 끼우면 이 노드로

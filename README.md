@@ -81,7 +81,8 @@ replace them with your own.
 | `claude` | Claude Code installed + Pro/Max login | Run `claude` in a terminal and check you are logged in |
 | `codex` | Codex CLI installed + ChatGPT login | `codex login` |
 | `gemini` | Gemini CLI installed + Google account login | Run `gemini` and log in |
-| `openai_compat` | An OpenAI-compatible server (Ollama, vLLM, llama.cpp, …) | See §2-1 below |
+| `ollama` / `vllm` / `llamacpp` | That server running locally | See §2-1 below |
+| `openai_compat` | Any other OpenAI-compatible server, or a hosted provider | See §2-1 below |
 
 - To use `file_access`, load a **tool-capable model** in LM Studio (the Qwen family works well).
 - To use images or video, load a **VLM (vision) model** in LM Studio.
@@ -93,14 +94,20 @@ All three expose an OpenAI-compatible `/v1/chat/completions` endpoint. The
 `openai_compat` backend reuses **exactly the same code path as LM Studio** and
 only changes the address.
 
-Put the address in the `openai_base_url` field (leave it empty to use
-`openai_compat.base_url` from `config.json`).
+**Pick the server straight from the `backend` dropdown.** `ollama`, `vllm` and
+`llamacpp` are the same backend as `openai_compat` with that server's standard
+port already filled in, so there is nothing to type:
 
-| Server | Address | Start with |
+| `backend` | Address it uses | Start the server with |
 |---|---|---|
-| Ollama | `http://127.0.0.1:11434` | `ollama serve` |
-| vLLM | `http://127.0.0.1:8000` | `vllm serve <model>` |
-| llama.cpp | `http://127.0.0.1:8080` | `llama-server -m <model>` |
+| `ollama` | `http://127.0.0.1:11434` | `ollama serve` |
+| `vllm` | `http://127.0.0.1:8000` | `vllm serve <model>` |
+| `llamacpp` | `http://127.0.0.1:8080` | `llama-server -m <model.gguf> --port 8080` |
+| `openai_compat` | `openai_compat.base_url` from `config.json` | anything else |
+
+If your server is somewhere else — another port, another machine — put the address
+in `openai_base_url` and it wins over the preset. **Leave `/v1` off the end**; the
+node appends `/v1/chat/completions` itself.
 
 Type the model name into the `model` field above (for example `qwen3:8b`). The
 dropdown is LM Studio only.
@@ -161,7 +168,7 @@ server — see §7 *Cost*.
 | `lmstudio_model` | LM Studio model dropdown. `(auto)` falls back to the `model` field and config |
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
-| `openai_base_url` | Address of the OpenAI-compatible server (`openai_compat` only) |
+| `openai_base_url` | Server address. Only needed when the server is **not** on its standard port (`openai_compat` and its `ollama`/`vllm`/`llamacpp` presets) |
 | `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
 | `seed` | Busts ComfyUI's cache so the same prompt runs again. On `lmstudio` / `openai_compat` a **non-zero** value is also sent to the server as the sampling seed; `0` sends nothing. The three CLIs have no seed flag |
 | `batch_mode` | What to do with an image batch: `all_in_one` (default) or `one_per_image`. See §5 |
@@ -527,7 +534,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**350 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**363 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -651,7 +658,8 @@ pip 의존성은 **`requests` 하나**입니다.
 | `claude` | Claude Code 설치 + Pro/Max 로그인 | 터미널에서 `claude` 실행 → 로그인 상태 확인 |
 | `codex` | Codex CLI 설치 + ChatGPT 로그인 | `codex login` |
 | `gemini` | Gemini CLI 설치 + 구글 계정 로그인 | `gemini` 실행 후 로그인 |
-| `openai_compat` | OpenAI 호환 서버 실행 (Ollama·vLLM·llama.cpp 등) | 아래 §2-1 참조 |
+| `ollama` / `vllm` / `llamacpp` | 해당 서버를 로컬에서 실행 | 아래 §2-1 참조 |
+| `openai_compat` | 그 밖의 OpenAI 호환 서버, 또는 유료 API | 아래 §2-1 참조 |
 
 - 파일 접근(`file_access`)을 쓰려면 LM Studio에서 **tool use를 지원하는 모델**(Qwen 계열 권장)을 로드하세요.
 - 이미지/비디오를 쓰려면 LM Studio에서 **VLM(비전) 모델**을 로드해야 합니다.
@@ -662,13 +670,20 @@ pip 의존성은 **`requests` 하나**입니다.
 Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제공합니다.
 `openai_compat` 백엔드는 **LM Studio 와 똑같은 코드 경로**를 쓰고 주소만 바꿉니다.
 
-`openai_base_url` 칸에 주소를 넣으세요 (비우면 `config.json` 의 `openai_compat.base_url`).
+**`backend` 드롭다운에서 서버를 바로 고르면 됩니다.** `ollama` / `vllm` / `llamacpp`
+는 `openai_compat` 과 같은 백엔드에 그 서버의 표준 포트만 미리 넣어둔 것이라,
+주소를 칠 필요가 없습니다.
 
-| 서버 | 주소 | 비고 |
+| `backend` | 쓰는 주소 | 서버 실행 |
 |---|---|---|
-| Ollama | `http://127.0.0.1:11434` | `ollama serve` |
-| vLLM | `http://127.0.0.1:8000` | `vllm serve <모델>` |
-| llama.cpp | `http://127.0.0.1:8080` | `llama-server -m <모델>` |
+| `ollama` | `http://127.0.0.1:11434` | `ollama serve` |
+| `vllm` | `http://127.0.0.1:8000` | `vllm serve <모델>` |
+| `llamacpp` | `http://127.0.0.1:8080` | `llama-server -m <모델.gguf> --port 8080` |
+| `openai_compat` | `config.json` 의 `openai_compat.base_url` | 그 밖의 서버 |
+
+서버가 다른 포트나 다른 PC 에 있으면 `openai_base_url` 에 주소를 적으세요 —
+미리 넣어둔 값보다 우선합니다. **끝에 `/v1` 을 붙이지 마세요.** 노드가
+`/v1/chat/completions` 를 직접 이어 붙입니다.
 
 모델 이름은 위쪽 `model` 칸에 직접 적습니다 (예: `qwen3:8b`). 드롭다운은 LM Studio 전용입니다.
 
@@ -728,7 +743,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 | `lmstudio_model` | LM Studio 모델 드롭다운. `(auto)`면 `model` 칸/설정을 따름 |
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
-| `openai_base_url` | OpenAI 호환 서버 주소 (`openai_compat` 전용) |
+| `openai_base_url` | 서버 주소. 표준 포트가 **아닐 때만** 채우면 됩니다 (`openai_compat` 과 `ollama`/`vllm`/`llamacpp` 프리셋용) |
 | `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
 | `seed` | ComfyUI 캐시를 무효화해 같은 프롬프트를 다시 돌리게 합니다. `lmstudio` / `openai_compat` 에서는 **0이 아닌 값**이면 샘플링 시드로 서버에도 함께 보냅니다(0이면 안 보냅니다). CLI 3종에는 시드 플래그가 없습니다 |
 | `batch_mode` | 이미지 배치를 어떻게 다룰지: `all_in_one`(기본) 또는 `one_per_image`. §5 참조 |
@@ -1096,7 +1111,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**350종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**363종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 
