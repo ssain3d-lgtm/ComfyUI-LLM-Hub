@@ -182,6 +182,11 @@ async function copyToClipboard(text) {
 // 모니터 창 높이. stream_view=off 로 숨길 때 되돌릴 값이라 모듈 범위에 둔다.
 const PANEL_HEIGHT = 240;
 
+// prompt 칸의 최소 높이. system_prompt 를 접어 넣은 자리를 여기로 돌린다 --
+// 실제로 매번 쓰는 칸은 이쪽이다. 최소값이라 사용자가 노드를 늘려 잡은 높이를
+// 깎지는 않는다.
+const PROMPT_MIN_HEIGHT = 180;
+
 // 결과 없이 끝났을 때 본문에 대신 적을 문장.
 //
 // 아무 상태나 옮기지는 않는다 -- "ok" 를 본문에 크게 써두면 그게 답처럼 보인다.
@@ -348,6 +353,15 @@ function viewMode(node) {
 //
 // DOM 위젯이라 숨기는 방법이 위젯들과 다르다. 어느 프론트엔드가 무엇을 보는지
 // 확인할 수 없어 셋 다 건다: 실제 요소, 그리고 두 가지 크기 계산 API.
+// prompt 는 ComfyUI 코어가 만드는 멀티라인 위젯이다. 높이를 직접 그리지 않고
+// computeSize 로 "이만큼 자리를 잡아달라" 고만 말한다. 구/신 프론트엔드가 서로
+// 다른 쪽을 보므로 둘 다 건다(모니터 패널에서 이미 확인한 방식이다).
+function applyPromptSize(widget) {
+  if (!widget) return;
+  widget.computeSize = (width) => [width, PROMPT_MIN_HEIGHT];
+  widget.computeLayoutSize = () => ({ minHeight: PROMPT_MIN_HEIGHT, minWidth: 200 });
+}
+
 function applyMonitorVisibility(node, mode) {
   const widget = node[PANEL_KEY]?.widget;
   if (!widget) return;
@@ -397,14 +411,19 @@ const BACKEND_ONLY = {
 };
 
 // 접었을 때 숨는 위젯. 여기 없는 것 = 항상 보이는 것이다:
-//   backend / prompt / system_prompt / lmstudio_model
+//   backend / prompt / lmstudio_model / server_model
+//
+// system_prompt 는 여기 들어 있다. 노드에서 직접 쓰는 대신 ✎ 편집창에서
+// 쓰고 저장하는 방식으로 바꿨기 때문이다(작은 칸에 긴 프롬프트를 붙여넣으면
+// 보이질 않아서 만든 창이다). 다만 아주 없애지는 않는다 -- ▾ 로 펼치면
+// 그대로 나온다. 편집창이 안 뜨는 상황에서도 값을 볼 길은 남아 있어야 한다.
 // 모니터 창을 system_prompt 바로 밑으로 끌어올리는 방법이 이것뿐이다 —
 // DOM 위젯 자체는 위로 옮길 수 없다(createPanel 의 주석 참고).
 const ADVANCED = [
   "model", "file_access", "workspace_dir", "temperature", "max_tokens",
   "timeout_sec", "seed", "video_max_frames", "stream_view", "video_path",
   "mcp_config", "extra_args", "lmstudio_ttl_sec", "lmstudio_unload_after",
-  "batch_mode", "extra_body",
+  "batch_mode", "extra_body", "system_prompt",
   // INPUT_TYPES 에 없는 이름이다. seed 에 control_after_generate:True 를 주면
   // 프론트엔드가 짝꿍 위젯을 하나 더 만들어 붙인다. seed 만 숨기면 이게 홀로 남아
   // "고급을 접었는데 웬 randomize 줄이 남아 있는" 모양이 된다.
@@ -488,7 +507,10 @@ function setupBackendToggle(node) {
       if (visible) {
         w.type = w._llmhubType;
         w.hidden = false;
+        // 여기서 무조건 지우면 아래에서 준 prompt 높이도 같이 날아간다.
         w.computeSize = undefined;
+        w.computeLayoutSize = undefined;
+        if (w.name === "prompt") applyPromptSize(w);
       } else {
         // type 을 바꾸는 건 예전 관용구고, 지금 프론트엔드는 w.hidden 을 본다.
         // 어느 쪽을 보는 버전인지 확인할 방법이 없어 둘 다 건다 — 한쪽만 걸면
@@ -874,6 +896,11 @@ function maybeAutoRefresh(node) {
     .catch(() => {});
 }
 
+function hasSystemPrompt(node) {
+  const value = node.widgets?.find((w) => w.name === "system_prompt")?.value;
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function isLmStudio(node) {
   return node.widgets?.find((w) => w.name === "backend")?.value === "lmstudio";
 }
@@ -927,8 +954,14 @@ const TITLE_BUTTONS = [
   {
     key: "prompt",
     icon: () => "✎",
-    hint: () => "Edit the system prompt",
-    active: () => false,
+    hint: (node) =>
+      hasSystemPrompt(node)
+        ? "Edit the system prompt (one is set)"
+        : "Edit the system prompt",
+    // 칸을 접어놨으므로, 시스템 프롬프트가 들어 있는지가 화면에서 사라진다.
+    // 저장된 워크플로우를 열었을 때 "빈 것처럼" 보이면 안 된다 -- 버튼을
+    // 눌린 색으로 칠해 들어 있다는 것만이라도 알린다.
+    active: (node) => hasSystemPrompt(node),
     onClick: (node) => openPromptEditor(node),
   },
   {

@@ -91,6 +91,10 @@ class TestWidgetVisibility(unittest.TestCase):
                 f"{widget}: 이 백엔드에서는 애초에 안 보인다",
             )
 
+    def _body(self, declaration):
+        after = self.javascript.split(declaration, 1)[1]
+        return after.split("\n}", 1)[0]
+
     def test_map_is_not_empty(self):
         self.assertTrue(self.mapping, "BACKEND_ONLY 를 못 읽었다 — JS 구조가 바뀌었나?")
 
@@ -109,10 +113,61 @@ class TestWidgetVisibility(unittest.TestCase):
         self.assertNotIn("backend", self.mapping)
 
     def test_core_widgets_are_never_hidden(self):
-        """접든 펴든, 어느 백엔드든 이것들은 보여야 한다."""
-        for name in ("backend", "prompt", "system_prompt"):
+        """접든 펴든, 어느 백엔드든 이것들은 보여야 한다.
+
+        system_prompt 는 여기서 빠졌다. 노드의 작은 칸 대신 ✎ 편집창에서 쓰고
+        저장하는 방식으로 바꿨기 때문이다. 대신 아래 세 테스트가 "그래도 닿을
+        수 있는가" 를 대신 지킨다 -- 그게 원래 이 테스트가 지키려던 것이다.
+        """
+        for name in ("backend", "prompt"):
             self.assertNotIn(name, self.mapping, f"{name}: BACKEND_ONLY 에 있으면 안 된다")
             self.assertNotIn(name, self.advanced, f"{name}: ADVANCED 에 있으면 안 된다")
+
+    def test_system_prompt_is_still_reachable_by_unfolding(self):
+        """접어두는 것과 없애는 것은 다르다.
+
+        편집창이 안 뜨는 상황(프론트엔드 버전 차이, JS 오류)에서도 값을 보고
+        고칠 길이 남아 있어야 한다. ▾ 로 펼치면 나오는 상태가 그 안전판이다.
+        """
+        self.assertIn("system_prompt", self.advanced)
+        self.assertNotIn(
+            "system_prompt", self.mapping,
+            "BACKEND_ONLY 에도 들어가면 어떤 백엔드에서는 펼쳐도 안 나온다",
+        )
+
+    def test_the_prompt_box_gets_the_freed_space(self):
+        """system_prompt 를 접었으면 그 자리는 prompt 가 받아야 한다.
+
+        접기만 하고 끝내면 노드만 작아진다 -- 정작 매번 쓰는 칸은 그대로다.
+        """
+        body = self._body("function applyPromptSize")
+        # 구/신 프론트엔드가 서로 다른 쪽을 본다. 한쪽만 걸면 버전에 따라 무시된다.
+        self.assertIn("widget.computeSize", body)
+        self.assertIn("widget.computeLayoutSize", body)
+        self.assertIn("PROMPT_MIN_HEIGHT", body)
+
+    def test_the_prompt_size_is_not_wiped_when_widgets_are_reshown(self):
+        """보이게 만드는 자리에서 computeSize 를 지운다. 거기서 다시 안 주면
+        고급 옵션을 한 번 접었다 펴는 순간 프롬프트 칸이 원래대로 줄어든다."""
+        body = self._body("const apply = () =>")
+        self.assertIn('if (w.name === "prompt") applyPromptSize(w)', body)
+
+    def test_the_editor_button_exists_as_the_main_path(self):
+        """칸을 접었으니 편집창이 주 경로가 된다. 그게 없으면 그냥 잃은 것이다."""
+        spec = self.javascript.split('key: "prompt"', 1)[1].split("},", 1)[0]
+        self.assertIn("openPromptEditor(node)", spec)
+
+    def test_a_set_system_prompt_is_visible_at_a_glance(self):
+        """칸이 접혀 있으면 "들어 있는지" 가 화면에서 사라진다.
+
+        저장해둔 워크플로우를 열었을 때 빈 것처럼 보이면, 시스템 프롬프트가
+        걸린 줄 모르고 결과가 왜 이러지 하게 된다.
+        """
+        spec = self.javascript.split('key: "prompt"', 1)[1].split("},", 1)[0]
+        self.assertIn("hasSystemPrompt(node)", spec)
+        body = self._body("function hasSystemPrompt")
+        self.assertIn('w.name === "system_prompt"', body)
+        self.assertIn("trim()", body)
 
     # control_after_generate 는 INPUT_TYPES 에 없다. seed 의 control_after_generate:True
     # 를 보고 프론트엔드가 만들어 붙이는 짝꿍 위젯이다(실측: node.widgets 인덱스 10).

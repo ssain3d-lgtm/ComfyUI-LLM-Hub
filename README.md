@@ -161,7 +161,7 @@ server — see §7 *Cost*.
 |---|---|
 | `backend` | Which backend to use |
 | `prompt` | User prompt |
-| `system_prompt` | System prompt |
+| `system_prompt` | System prompt. **Folded into the advanced options** — write it in the editor (**`✎`**) instead. See §3-1 |
 | `model` | Leave empty for the backend default |
 | `file_access` | When on, the model can read files inside `workspace_dir` |
 | `workspace_dir` | Working root folder (required when `file_access` is on) |
@@ -191,7 +191,7 @@ They are icon-only so they do not cover the node's name; **hover one to see what
 | Button | What it does |
 |---|---|
 | **`▾` / `▴`** | Expand / collapse the advanced options. Most inputs are hidden by default so the node stays small; `backend`, `prompt`, `system_prompt` and the model dropdown always stay visible. The state is saved with the workflow |
-| **`✎`** | Open the system prompt editor (§3-1) |
+| **`✎`** | Open the system prompt editor (§3-1). Drawn pressed while a system prompt is set, since the box itself is folded away |
 | **`⟳`** | Refresh the model dropdown. Shown for `lmstudio` and for the OpenAI-compatible backends — see below |
 
 Both the `▾` toggle and `⟳` are also in the node's right-click menu.
@@ -233,8 +233,19 @@ raising.
 
 ## 3-1. The system prompt editor
 
-The input box on the node is small, so long prompts are hard to read and paste
-into. Click the **`✎`** button on the node's title bar to open a full-size editor.
+A long system prompt is unreadable in a small box on the node, so **the box is not on
+the node any more** — it is folded into the advanced options, and the editor is where
+you write one. Click the **`✎`** button on the node's title bar.
+
+The space it used to take went to the `prompt` box, which is the one you actually type
+in on every run.
+
+Two things follow from the box being hidden, both deliberate:
+
+- **`✎` is drawn pressed while a system prompt is set.** Otherwise a workflow with one
+  saved would look empty, and you would wonder why the output reads oddly.
+- **`▾` still reveals the raw box.** Folding it away is not the same as removing it — if
+  the editor ever fails to open, there has to be another way to see and fix the value.
 
 ```
 ┌─ System prompt ───────────────────────────────── ✕ ┐
@@ -547,7 +558,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**384 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**389 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -748,7 +759,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 |---|---|
 | `backend` | 사용할 백엔드 |
 | `prompt` | 유저 프롬프트 |
-| `system_prompt` | 시스템 프롬프트 |
+| `system_prompt` | 시스템 프롬프트. **고급 옵션 안에 접혀 있습니다** — **`✎`** 편집창에서 쓰세요. §3-1 참조 |
 | `model` | 비워두면 백엔드 기본값 |
 | `file_access` | 켜면 `workspace_dir` 안의 파일을 읽을 수 있음 |
 | `workspace_dir` | 작업 루트 폴더 (file_access를 켰다면 필수) |
@@ -778,7 +789,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 | 버튼 | 하는 일 |
 |---|---|
 | **`▾` / `▴`** | 고급 옵션 펼치기 / 접기. 위 입력 대부분은 기본적으로 숨겨져 노드가 작게 유지되고, `backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다. 펼침 상태는 워크플로우에 함께 저장됩니다 |
-| **`✎`** | 시스템 프롬프트 편집창 열기 (§3-1) |
+| **`✎`** | 시스템 프롬프트 편집창 열기 (§3-1). 칸이 접혀 있으므로, 시스템 프롬프트가 들어 있으면 버튼이 눌린 색으로 표시됩니다 |
 | **`⟳`** | 모델 드롭다운 다시 받기. `lmstudio` 와 OpenAI 호환 백엔드에서 보입니다 — 아래 참조 |
 
 `▾` 와 `⟳` 는 노드 우클릭 메뉴에도 있습니다.
@@ -820,8 +831,19 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 
 ## 3-1. 시스템 프롬프트 편집창
 
-노드 안의 입력칸은 작아서 긴 프롬프트를 붙여넣으면 전체가 안 보입니다.
-노드 **제목 줄의 `✎` 버튼**을 누르면 큰 편집창이 열립니다.
+긴 시스템 프롬프트는 노드의 작은 칸에서 읽을 수가 없어서, **이제 그 칸은 노드에
+없습니다.** 고급 옵션 안으로 접어 넣었고, 쓰는 곳은 편집창입니다.
+노드 **제목 줄의 `✎` 버튼**을 누르세요.
+
+비운 자리는 `prompt` 칸이 가져갔습니다 — 매번 실제로 치는 칸은 이쪽이니까요.
+
+칸을 숨기면서 따라오는 두 가지도 일부러 넣었습니다.
+
+- **시스템 프롬프트가 들어 있으면 `✎` 가 눌린 색으로 표시됩니다.** 안 그러면
+  저장해둔 워크플로우를 열었을 때 빈 것처럼 보여서, 프롬프트가 걸린 줄 모르고
+  결과가 왜 이러지 하게 됩니다.
+- **`▾` 로 펼치면 원래 칸이 그대로 나옵니다.** 접는 것과 없애는 것은 다릅니다 —
+  편집창이 안 뜨는 상황에서도 값을 보고 고칠 길은 남아 있어야 합니다.
 
 ```
 ┌─ System prompt ───────────────────────────────── ✕ ┐
@@ -1135,7 +1157,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**384종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**389종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 
