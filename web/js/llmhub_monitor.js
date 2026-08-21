@@ -507,9 +507,21 @@ function setupBackendToggle(node) {
       if (visible) {
         w.type = w._llmhubType;
         w.hidden = false;
-        // 여기서 무조건 지우면 아래에서 준 prompt 높이도 같이 날아간다.
-        w.computeSize = undefined;
-        w.computeLayoutSize = undefined;
+        // 대입이 아니라 delete 여야 한다.
+        //
+        // 멀티라인 칸(system_prompt / extra_body)은 이 프론트엔드에서
+        // DOMWidgetImpl 인스턴스이고, 높이를 프로토타입 메서드
+        // computeLayoutSize 로 스스로 잰다(요소의 --comfy-widget-min-height 를
+        // 읽는다). `= undefined` 를 대입하면 인스턴스 속성이 그 프로토타입
+        // 메서드를 가려버리고, 레이아웃은 `if (w.computeLayoutSize)` 로 truthy
+        // 검사만 하므로 falsy 가 된다 — 고급 옵션을 펼친 순간 그 칸들이 제
+        // 높이를 못 받아 윗부분이 잘린다(실측: 프론트엔드 1.49.6).
+        // delete 는 인스턴스 속성만 지워 프로토타입이 다시 보이게 한다.
+        //
+        // prompt 는 여기서 지운 뒤 아래에서 다시 준다. 안 주면 고급 옵션을
+        // 한 번 접었다 펴는 순간 프롬프트 칸이 원래대로 줄어든다.
+        delete w.computeSize;
+        delete w.computeLayoutSize;
         if (w.name === "prompt") applyPromptSize(w);
       } else {
         // type 을 바꾸는 건 예전 관용구고, 지금 프론트엔드는 w.hidden 을 본다.

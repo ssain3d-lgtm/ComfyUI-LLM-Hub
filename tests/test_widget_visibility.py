@@ -152,6 +152,28 @@ class TestWidgetVisibility(unittest.TestCase):
         body = self._body("const apply = () =>")
         self.assertIn('if (w.name === "prompt") applyPromptSize(w)', body)
 
+    def test_reshowing_restores_the_dom_widget_height_instead_of_wiping_it(self):
+        """멀티라인 칸을 되살릴 때는 대입이 아니라 delete 여야 한다.
+
+        멀티라인 칸(system_prompt / extra_body)은 이 프론트엔드에서 DOMWidgetImpl
+        인스턴스이고, 높이를 프로토타입 메서드 computeLayoutSize 로 스스로 잰다
+        (요소의 --comfy-widget-min-height 를 읽는다, 1.49.6 번들에서 확인).
+
+        인스턴스에 `= undefined` 를 대입하면 그 프로토타입 메서드가 가려진다.
+        레이아웃은 `if (w.computeLayoutSize)` 로 truthy 검사만 하므로 falsy 가 되고,
+        고급 옵션을 펼친 순간 그 칸들이 제 높이를 못 받아 윗부분이 잘린다.
+        prompt 만 멀쩡했던 건 바로 다음 줄에서 다시 넣어줬기 때문이다.
+
+        delete 는 인스턴스 속성만 지워 프로토타입이 다시 보이게 한다.
+        """
+        body = self._body("const apply = () =>")
+        self.assertIn("delete w.computeSize", body)
+        self.assertIn("delete w.computeLayoutSize", body)
+        self.assertNotIn(
+            "w.computeLayoutSize = undefined", body,
+            "대입은 프로토타입 메서드를 가린다 — DOM 위젯이 높이를 잃는다",
+        )
+
     def test_the_editor_button_exists_as_the_main_path(self):
         """칸을 접었으니 편집창이 주 경로가 된다. 그게 없으면 그냥 잃은 것이다."""
         spec = self.javascript.split('key: "prompt"', 1)[1].split("},", 1)[0]
