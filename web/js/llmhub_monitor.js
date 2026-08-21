@@ -410,6 +410,18 @@ const ADVANCED = [
   "control_after_generate",
 ];
 
+// 백엔드에 따라서만 "고급" 이 되는 위젯.
+//
+// openai_base_url 은 openai_compat 에서는 항상 보여야 한다 -- 미리 잡아둔 주소가
+// 없어서 사용자가 직접 넣거나 config.json 에 적어야 하기 때문이다.
+// 반대로 ollama / vllm / llamacpp 는 고른 순간 표준 포트가 이미 잡힌다. 그런데도
+// 빈 주소 칸이 눈에 잘 띄는 자리(모델 드롭다운이 있던 그 자리)에 남아 있으면
+// "여기를 채워야 도는구나" 로 읽힌다 -- 안 채워도 도는데.
+// 그래서 이 셋에서는 접어두고, 표준 포트가 아닌 곳에 띄운 사람만 펼쳐서 쓴다.
+const ADVANCED_FOR = {
+  openai_base_url: ["ollama", "vllm", "llamacpp"],
+};
+
 const SHOW_ADVANCED_PROP = "showAdvanced";
 
 // 위젯을 숨기거나 되살린 뒤 노드 높이를 그만큼 조정한다.
@@ -465,7 +477,11 @@ function setupBackendToggle(node) {
       // 이 백엔드가 안 쓰는 위젯은 펼쳐도 안 보인다 — 펼침은 "고급"만 여는 것이지
       // 무의미한 위젯까지 되살리는 게 아니다.
       const usedByBackend = !backends || backends.includes(backend);
-      const visible = usedByBackend && (showAdvanced || !ADVANCED.includes(w.name));
+      // 항상 고급인 것 + 이 백엔드에서만 고급인 것
+      const isAdvanced =
+        ADVANCED.includes(w.name) ||
+        (ADVANCED_FOR[w.name] || []).includes(backend);
+      const visible = usedByBackend && (showAdvanced || !isAdvanced);
 
       if (w._llmhubType === undefined) w._llmhubType = w.type;
       if (visible) {
