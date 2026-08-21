@@ -106,8 +106,12 @@ port already filled in, so there is nothing to type:
 | `openai_compat` | `openai_compat.base_url` from `config.json` | anything else |
 
 If your server is somewhere else — another port, another machine — put the address
-in `openai_base_url` and it wins over the preset. **Leave `/v1` off the end**; the
-node appends `/v1/chat/completions` itself.
+in `openai_base_url` and it wins over the preset. On `ollama` / `vllm` / `llamacpp`
+that box is **folded into the advanced options** (click **`▾`** on the title bar),
+because the address is already set and an empty box sitting in plain sight reads
+like something you have to fill in. On `openai_compat` it stays visible, since
+there is no preset to fall back on. **Leave `/v1` off the end**; the node appends
+`/v1/chat/completions` itself.
 
 Type the model name into the `model` field above (for example `qwen3:8b`). The
 dropdown is LM Studio only.
@@ -534,7 +538,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**363 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**367 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -682,8 +686,11 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 | `openai_compat` | `config.json` 의 `openai_compat.base_url` | 그 밖의 서버 |
 
 서버가 다른 포트나 다른 PC 에 있으면 `openai_base_url` 에 주소를 적으세요 —
-미리 넣어둔 값보다 우선합니다. **끝에 `/v1` 을 붙이지 마세요.** 노드가
-`/v1/chat/completions` 를 직접 이어 붙입니다.
+미리 넣어둔 값보다 우선합니다. `ollama` / `vllm` / `llamacpp` 에서는 이 칸이
+**고급 옵션 안에 접혀 있습니다** (제목 줄의 **`▾`**). 주소가 이미 잡혀 있는데
+빈 칸이 눈에 띄는 자리에 있으면 "채워야 도는구나" 로 읽히기 때문입니다.
+`openai_compat` 에서는 기본값이 없으므로 그대로 보입니다.
+**끝에 `/v1` 을 붙이지 마세요.** 노드가 `/v1/chat/completions` 를 직접 이어 붙입니다.
 
 모델 이름은 위쪽 `model` 칸에 직접 적습니다 (예: `qwen3:8b`). 드롭다운은 LM Studio 전용입니다.
 
@@ -1111,7 +1118,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**363종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**367종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 

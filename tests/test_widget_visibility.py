@@ -48,6 +48,49 @@ class TestWidgetVisibility(unittest.TestCase):
         spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()
         self.widget_names = set(spec.get("required", {})) | set(spec.get("optional", {}))
 
+    def _advanced_for(self):
+        """JS 의 ADVANCED_FOR 리터럴을 {위젯: [백엔드...]} 로 읽는다."""
+        body = self.javascript.split("const ADVANCED_FOR = {", 1)[1].split("\n};", 1)[0]
+        return {
+            name: re.findall(r'"([^"]+)"', names)
+            for name, names in re.findall(r"(\w+)\s*:\s*\[([^\]]*)\]", body)
+        }
+
+    def test_address_box_is_folded_away_for_the_preset_backends(self):
+        """ollama/vllm/llamacpp 는 고른 순간 주소가 잡힌다.
+
+        그런데도 빈 주소 칸이 눈에 띄는 자리에 남아 있으면 "여기를 채워야
+        도는구나" 로 읽힌다 -- 안 채워도 도는데.
+        """
+        aliases = set(backends_mod.OPENAI_COMPAT_ALIASES)
+        folded = set(self._advanced_for().get("openai_base_url", []))
+        self.assertEqual(folded, aliases)
+
+    def test_address_box_stays_visible_for_plain_openai_compat(self):
+        """이쪽은 미리 잡아둔 주소가 없다. 접어버리면 어디에 붙일지 알 방법이 없다."""
+        self.assertNotIn(
+            "openai_compat", self._advanced_for().get("openai_base_url", [])
+        )
+        self.assertNotIn("openai_base_url", self.advanced)
+
+    def test_advanced_for_names_real_widgets_and_backends(self):
+        known = set(backends_mod.BACKEND_NAMES)
+        for widget, names in self._advanced_for().items():
+            self.assertIn(widget, self.widget_names, widget)
+            self.assertEqual(sorted(set(names) - known), [], widget)
+
+    def test_advanced_for_widgets_are_visible_for_those_backends(self):
+        """BACKEND_ONLY 로 이미 숨는 위젯을 ADVANCED_FOR 에 또 넣으면,
+        펼쳐도 안 나타나는데 접힌 것처럼 보이는 유령 설정이 된다."""
+        for widget, names in self._advanced_for().items():
+            allowed = self.mapping.get(widget)
+            if allowed is None:
+                continue
+            self.assertEqual(
+                sorted(set(names) - set(allowed)), [],
+                f"{widget}: 이 백엔드에서는 애초에 안 보인다",
+            )
+
     def test_map_is_not_empty(self):
         self.assertTrue(self.mapping, "BACKEND_ONLY 를 못 읽었다 — JS 구조가 바뀌었나?")
 
