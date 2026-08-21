@@ -24,6 +24,7 @@ from .base import (
     format_usage,
     frames_for_unsupported_video,
     merge_extra_body,
+    server_error_reason,
     tail_lines,
     truncate_debug,
     validate_workspace,
@@ -408,7 +409,18 @@ class LMStudioBackend(BaseBackend):
                         "(this server cannot reproduce results by seed)"
                     )
                     continue
-                status = "rate_limited" if detect_rate_limit(body) else f"error: LM Studio HTTP {resp.status_code}"
+                if detect_rate_limit(body):
+                    status = "rate_limited"
+                else:
+                    # 이름은 self.name 이다. 별칭 백엔드(ollama/vllm/llamacpp)에는
+                    # 사용자가 드롭다운에서 고른 이름이 그대로 들어 있다 --
+                    # llamacpp 를 골랐는데 "LM Studio" 라고 하면 엉뚱한 데를 뒤진다.
+                    status = f"error: {self.name} HTTP {resp.status_code}"
+                    # 서버가 말해준 이유를 그대로 옮긴다. README 가 이미 그렇게
+                    # 약속하고 있다("서버가 거부하면 그 서버의 문구가 status 에").
+                    reason = server_error_reason(body)
+                    if reason:
+                        status = f"{status} - {reason}"
                 return (
                     LLMResponse(status=status, raw_debug=f"HTTP {resp.status_code}\n{body}"),
                     notes,
@@ -427,7 +439,7 @@ class LMStudioBackend(BaseBackend):
             if not choices:
                 return (
                     LLMResponse(
-                        status="error: the LM Studio response has no choices",
+                        status=f"error: the {self.name} response has no choices",
                         raw_debug=json.dumps(data, ensure_ascii=False)[:2000],
                     ),
                     notes,
@@ -511,7 +523,7 @@ class LMStudioBackend(BaseBackend):
         if isinstance(exc, (requests.ConnectionError,)):
             status = CONNECT_ERROR_MSG
         elif isinstance(exc, requests.Timeout):
-            status = f"error: timeout({int(duration)}s) - LM Studio was too slow to respond"
+            status = f"error: timeout({int(duration)}s) - {self.name} was too slow to respond"
         else:
             status = f"error: {type(exc).__name__}: {exc}"
         return LLMResponse(
