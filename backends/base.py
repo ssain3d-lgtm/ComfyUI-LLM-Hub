@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -178,6 +179,49 @@ def detect_rate_limit(*chunks: str) -> bool:
     """출력에 사용량 한도/쿼터 문구가 있으면 True."""
     blob = "\n".join(c for c in chunks if c).lower()
     return any(p in blob for p in _RATE_LIMIT_PATTERNS)
+
+
+def server_error_reason(body: str, limit: int = 200) -> str:
+    """HTTP 오류 본문에서 status 에 실을 한 줄을 뽑는다. 못 알아보면 빈 문자열.
+
+    코드만 돌려주면(`HTTP 500`) 사용자는 debug 를 열기 전까지 무슨 일인지 알 수
+    없다. 실측 사례: llama.cpp 라우터가 못 뜨는 모델에 대해 내는
+    `{"error":{"message":"model name=... failed to load"}}` 가 그랬다 --
+    화면에는 `error: LM Studio HTTP 500` 한 줄뿐이라 라우터가 죽은 줄 알았다.
+
+    본문 모양은 서버마다 다르다. 아는 모양만 읽고, 모르면 빈 문자열을 준다 --
+    원문은 어차피 debug 에 통째로 남으므로 여기서 지어낼 이유가 없다.
+      {"error": {"message": "..."}}   OpenAI / llama.cpp / LM Studio
+      {"error": "..."}                Ollama 등
+      {"message": "..."}
+    """
+    text = (body or "").strip()
+    if not text:
+        return ""
+
+    try:
+        data = json.loads(text)
+    except Exception:
+        # JSON 이 아니면 프록시가 낀 HTML 일 때가 많다. 통째로 실으면 status 가
+        # 태그로 뒤덮이므로 아래 한 줄 접기/자르기에만 맡긴다.
+        data = None
+
+    if isinstance(data, dict):
+        error = data.get("error", data)
+        if isinstance(error, dict):
+            text = str(error.get("message") or error.get("detail") or "").strip()
+        elif isinstance(error, str):
+            text = error.strip()
+        else:
+            text = ""
+        if not text:
+            text = str(data.get("message") or "").strip()
+
+    # status 는 노드에 한 줄로 보이는 자리다. 줄바꿈은 접고 길면 자른다.
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
 
 
 def tail_lines(text: str, n: int = 20) -> str:

@@ -488,5 +488,72 @@ class TestNodeWiring(unittest.TestCase):
             self.assertEqual(mapping.get(widget), ["lmstudio"], widget)
 
 
+class TestHttpErrorStatus(unittest.TestCase):
+    """서버가 4xx/5xx 를 내면 status 가 무엇을 말해야 하는가.
+
+    실측 사례: llama.cpp 라우터에 못 뜨는 프리셋을 고르면
+        HTTP 500 {"error":{"message":"model name=... failed to load"}}
+    가 오는데, status 는 `error: LM Studio HTTP 500` 한 줄이었다. 고른 백엔드는
+    llamacpp 인데 LM Studio 얘기를 하고, 진짜 이유는 debug 를 열어야 나왔다.
+    README 는 이미 "서버가 거부하면 그 서버의 문구가 status 에 돌아온다" 고
+    적어두고 있었다 — 코드가 문서를 안 지키고 있던 쪽이다.
+    """
+
+    FAILED_TO_LOAD = {
+        "error": {
+            "code": 500,
+            "message": "model name=qwen3.8-27b-mtp+fastmtp failed to load",
+            "type": "server_error",
+        }
+    }
+
+    def _run(self, backend, body, code=500):
+        with MockLMStudio(error_response=(code, body)) as server:
+            return nodes_mod.LLMHubGenerate().generate(
+                backend=backend, prompt="hi", system_prompt="", model="m",
+                file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
+                timeout_sec=10, seed=0, stream_view="off",
+                openai_base_url=server.base_url,
+            )["result"]
+
+    def test_the_status_names_the_backend_the_user_chose(self):
+        """llamacpp 를 골랐는데 LM Studio 라고 하면 엉뚱한 데를 뒤지게 된다."""
+        status = self._run("llamacpp", self.FAILED_TO_LOAD)[1]
+        self.assertIn("llamacpp", status, status)
+        self.assertNotIn("LM Studio", status)
+
+    def test_the_status_carries_the_server_reason(self):
+        """코드만 있고 이유가 없으면 debug 를 열기 전까지 아무것도 알 수 없다."""
+        status = self._run("llamacpp", self.FAILED_TO_LOAD)[1]
+        self.assertIn("500", status, status)
+        self.assertIn("failed to load", status, status)
+
+    def test_a_plain_string_error_body_also_comes_through(self):
+        """서버마다 오류 본문 모양이 다르다. 중첩 dict 만 읽으면 절반은 놓친다."""
+        status = self._run("llamacpp", {"error": "context window exceeded"})[1]
+        self.assertIn("context window exceeded", status, status)
+
+    def test_lmstudio_still_names_itself(self):
+        """LM Studio 백엔드는 openai_base_url 을 안 본다. config 로 붙인다."""
+        lms_mod = importlib.import_module(f"{_PACK_NAME}.backends.lmstudio")
+        with MockLMStudio(error_response=(500, self.FAILED_TO_LOAD)) as server:
+            impl = lms_mod.LMStudioBackend(config={"lmstudio": {"base_url": server.base_url}})
+            resp = impl.generate(
+                base.LLMRequest("lmstudio", "m", "", "hi", timeout_s=10)
+            )
+        self.assertIn("lmstudio", resp.status, resp.status)
+
+    def test_a_quota_body_still_maps_to_rate_limited(self):
+        """한도 초과는 별도 status 로 남아야 한다 — 배치가 이 값을 보고 멈춘다."""
+        body = {"error": {"message": "rate limit exceeded", "type": "rate_limit_error"}}
+        self.assertEqual(self._run("llamacpp", body, code=429)[1], "rate_limited")
+
+    def test_the_debug_still_has_the_whole_body(self):
+        """status 는 한 줄로 줄이는 자리다. 원문은 debug 에 그대로 남아야 한다."""
+        debug = self._run("llamacpp", self.FAILED_TO_LOAD)[2]
+        self.assertIn("HTTP 500", debug)
+        self.assertIn("server_error", debug)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

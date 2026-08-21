@@ -26,8 +26,11 @@ class MockLMStudio:
     """
 
     def __init__(self, script=None, models=None, fail_without_model=False, sse=False,
-                 require_token="", reject_seed=False, usage=None):
+                 require_token="", reject_seed=False, usage=None, error_response=None):
         self.sse = sse
+        # (코드, 본문) 을 주면 생성 요청에 늘 그 오류를 돌려준다. llama.cpp 라우터가
+        # "모델을 못 띄웠다" 로 내는 500 처럼, 이유가 본문에만 있는 응답을 재현한다.
+        self.error_response = error_response
         # seed 필드를 모르는 서버 흉내. 실제로 그런 서버가 있는지는 확인 못 했지만,
         # 있어도 생성 전체가 죽으면 안 되므로 폴백 경로를 검증해둔다.
         self.reject_seed = reject_seed
@@ -95,6 +98,11 @@ class MockLMStudio:
                 length = int(self.headers.get("Content-Length") or 0)
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 outer.requests.append(payload)
+
+                if outer.error_response:
+                    code, body = outer.error_response
+                    self._send_json(code, body)
+                    return
 
                 if outer.reject_seed and "seed" in payload:
                     self._send_json(
