@@ -170,6 +170,7 @@ server — see §7 *Cost*.
 | `video_max_frames` | How many frames to extract when converting video (default 8) |
 | `stream_view` | Monitor display mode: `plain` (default) / `markdown` / `off` |
 | `lmstudio_model` | LM Studio model dropdown. `(auto)` falls back to the `model` field and config |
+| `server_model` | Model dropdown for `openai_compat` / `ollama` / `vllm` / `llamacpp`, read from whichever of those servers is running **on this machine**. `(auto)` falls back to the `model` field |
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
 | `openai_base_url` | Server address. Only needed when the server is **not** on its standard port (`openai_compat` and its `ollama`/`vllm`/`llamacpp` presets) |
@@ -191,15 +192,23 @@ They are icon-only so they do not cover the node's name; **hover one to see what
 |---|---|
 | **`▾` / `▴`** | Expand / collapse the advanced options. Most inputs are hidden by default so the node stays small; `backend`, `prompt`, `system_prompt` and the model dropdown always stay visible. The state is saved with the workflow |
 | **`✎`** | Open the system prompt editor (§3-1) |
-| **`⟳`** | Refresh the LM Studio model list. Only shown when `backend` is `lmstudio` — see below |
+| **`⟳`** | Refresh the model dropdown. Shown for `lmstudio` and for the OpenAI-compatible backends — see below |
 
 Both the `▾` toggle and `⟳` are also in the node's right-click menu.
 
-**About `⟳`.** The `lmstudio_model` dropdown is built when ComfyUI asks the node what
-its inputs are, which happens once at startup. **If ComfyUI starts before the LM Studio
-server, the list is stuck at `(auto)`** until you reload the page. `⟳` re-fetches it in
-place, so no ComfyUI restart and no page reload. The result appears under the button for
-a few seconds. The node also tries this once, quietly, when the list looks empty.
+**About `⟳`.** The model dropdowns are built when ComfyUI asks the node what its inputs
+are, which happens once at startup. **If ComfyUI starts before your model server, the
+list is stuck at `(auto)`** until you reload the page. `⟳` re-fetches it in place, so no
+ComfyUI restart and no page reload. The result appears under the button for a few
+seconds. The node also tries this once, quietly, when the list looks empty.
+
+**`server_model` only lists servers on this machine.** It probes the three standard
+loopback ports (11434 / 8000 / 8080), plus `openai_compat.base_url` from `config.json`
+when that is a loopback address too. Remote and paid endpoints are deliberately left
+out: this runs every time ComfyUI asks the node for its inputs, and pointing that at a
+hosted provider would fire a request at somebody else's server every time you open the
+page. For those, type the model name into `model` instead. The API token is only ever
+sent to the address you configured, never to the three standard ports.
 
 The outputs are `text` (the generated text), `status`, and `debug` (raw response and diagnostics).
 
@@ -538,7 +547,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**367 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**384 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -748,6 +757,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 | `video_max_frames` | 비디오를 프레임으로 바꿀 때 뽑을 장수 (기본 8) |
 | `stream_view` | 모니터링 창 표시 방식: `plain`(기본) / `markdown` / `off` |
 | `lmstudio_model` | LM Studio 모델 드롭다운. `(auto)`면 `model` 칸/설정을 따름 |
+| `server_model` | `openai_compat` / `ollama` / `vllm` / `llamacpp` 용 모델 드롭다운. **이 컴퓨터에** 떠 있는 서버에서 읽어옵니다. `(auto)`면 `model` 칸을 따름 |
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
 | `openai_base_url` | 서버 주소. 표준 포트가 **아닐 때만** 채우면 됩니다 (`openai_compat` 과 `ollama`/`vllm`/`llamacpp` 프리셋용) |
@@ -769,16 +779,23 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 |---|---|
 | **`▾` / `▴`** | 고급 옵션 펼치기 / 접기. 위 입력 대부분은 기본적으로 숨겨져 노드가 작게 유지되고, `backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다. 펼침 상태는 워크플로우에 함께 저장됩니다 |
 | **`✎`** | 시스템 프롬프트 편집창 열기 (§3-1) |
-| **`⟳`** | LM Studio 모델 목록 다시 받기. `backend` 가 `lmstudio` 일 때만 보입니다 — 아래 참조 |
+| **`⟳`** | 모델 드롭다운 다시 받기. `lmstudio` 와 OpenAI 호환 백엔드에서 보입니다 — 아래 참조 |
 
 `▾` 와 `⟳` 는 노드 우클릭 메뉴에도 있습니다.
 
-**`⟳` 에 대해.** `lmstudio_model` 드롭다운은 ComfyUI 가 노드에게 "입력이 뭐냐" 고
+**`⟳` 에 대해.** 모델 드롭다운은 ComfyUI 가 노드에게 "입력이 뭐냐" 고
 물을 때 만들어지는데, 그건 시작할 때 한 번뿐입니다. **ComfyUI 가 LM Studio 서버보다
 먼저 뜨면 목록이 `(auto)` 하나로 굳어** 페이지를 새로 열기 전까지 그대로입니다.
 `⟳` 는 그 자리에서 다시 받아옵니다 — ComfyUI 재시작도, 페이지 새로고침도 필요
 없습니다. 결과는 버튼 아래에 몇 초간 표시됩니다. 목록이 비어 보이면 노드가 조용히
 한 번은 알아서 시도하기도 합니다.
+
+**`server_model` 은 이 컴퓨터의 서버만 조회합니다.** 표준 loopback 포트 3개
+(11434 / 8000 / 8080)와, `config.json` 의 `openai_compat.base_url` 이 loopback 일
+때 그것까지만 봅니다. 원격·유료 주소는 일부러 뺐습니다 — 이 조회는 ComfyUI 가
+노드에게 입력을 물을 때마다 실행되는데, 거기에 유료 API 를 물리면 **페이지를 열
+때마다 남의 서버로 요청이 나갑니다.** 그런 서버는 `model` 칸에 이름을 직접 적으세요.
+토큰은 설정에 적힌 주소에만 보내고, 표준 포트 3개에는 절대 보내지 않습니다.
 
 출력은 `text`(생성된 텍스트) / `status` / `debug`(원시 응답·진단)입니다.
 
@@ -1118,7 +1135,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**367종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**384종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 

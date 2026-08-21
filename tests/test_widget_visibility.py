@@ -454,13 +454,45 @@ class TestConnectButton(unittest.TestCase):
         self.assertIsNotNone(found, "JS 에서 AUTO_MODEL 을 못 읽었다")
         self.assertEqual(found.group(1), nodes_mod.AUTO_MODEL)
 
-    def test_target_widget_actually_exists(self):
-        """MODEL_WIDGET 이름에 오타가 나면 아무 일도 안 일어난다(에러도 없이)."""
-        found = re.search(r'const MODEL_WIDGET = "([^"]+)"', self.javascript)
-        self.assertIsNotNone(found, "JS 에서 MODEL_WIDGET 을 못 읽었다")
+    def _widget_names(self):
         spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()
-        names = set(spec.get("required", {})) | set(spec.get("optional", {}))
-        self.assertIn(found.group(1), names)
+        return set(spec.get("required", {})) | set(spec.get("optional", {}))
+
+    def _model_widgets(self):
+        body = self.javascript.split("const MODEL_WIDGETS = [", 1)[1].split("]", 1)[0]
+        return re.findall(r'"([^"]+)"', body)
+
+    def _model_widget_for(self):
+        body = self.javascript.split("const MODEL_WIDGET_FOR = {", 1)[1].split("\n};", 1)[0]
+        return dict(re.findall(r'(\w+)\s*:\s*"([^"]+)"', body))
+
+    def test_target_widgets_actually_exist(self):
+        """이름에 오타가 나면 아무 일도 안 일어난다(에러도 없이)."""
+        names = self._widget_names()
+        self.assertTrue(self._model_widgets(), "MODEL_WIDGETS 를 못 읽었다")
+        for widget in self._model_widgets():
+            self.assertIn(widget, names, widget)
+
+    def test_every_dropdown_is_reachable_from_some_backend(self):
+        """새로 받아오기만 하고 아무도 안 보는 드롭다운은 죽은 코드다."""
+        self.assertEqual(
+            set(self._model_widget_for().values()), set(self._model_widgets())
+        )
+
+    def test_model_widget_map_names_real_backends(self):
+        known = set(backends_mod.BACKEND_NAMES)
+        unknown = sorted(set(self._model_widget_for()) - known)
+        self.assertEqual(unknown, [], f"존재하지 않는 백엔드: {unknown}")
+
+    def test_the_map_agrees_with_what_is_actually_shown(self):
+        """MODEL_WIDGET_FOR 가 BACKEND_ONLY 와 어긋나면, 새로고침 버튼이 그
+        백엔드에서 "안 보이는 드롭다운" 을 세어 보고하게 된다."""
+        mapping = _backend_only_map(self.javascript)
+        for backend, widget in self._model_widget_for().items():
+            allowed = mapping.get(widget)
+            if allowed is None:
+                continue
+            self.assertIn(backend, allowed, f"{backend}: {widget} 이 안 보이는데 센다")
 
     def test_no_new_server_route(self):
         """ComfyUI 코어의 /object_info 를 다시 받는다.
@@ -521,10 +553,19 @@ class TestConnectButton(unittest.TestCase):
         # notice 가 먼저, 호버는 그 다음
         self.assertLess(body.index("if (notice)"), body.index("else if (hover"))
 
-    def test_button_only_appears_for_lmstudio(self):
-        """다른 백엔드에서는 눌러도 의미가 없다(하는 일이 LM Studio 조회뿐)."""
+    def test_button_only_appears_where_there_is_a_dropdown(self):
+        """CLI 3종에는 새로 받아올 목록 자체가 없다. 버튼이 할 일이 없다."""
         spec = self.javascript.split('key: "connect"', 1)[1].split("},", 1)[0]
-        self.assertIn("visible: isLmStudio", spec)
+        self.assertIn("visible: hasModelDropdown", spec)
+
+        body = self._body("function hasModelDropdown")
+        self.assertIn("modelWidgetFor(node)", body)
+
+        # 판정의 근거가 MODEL_WIDGET_FOR 이므로, CLI 3종이 거기 없어야 숨는다.
+        mapped = set(self._model_widget_for())
+        for cli in ("claude", "codex", "gemini"):
+            self.assertNotIn(cli, mapped, f"{cli}: 새로고침할 목록이 없다")
+        self.assertIn("lmstudio", mapped)
 
     def test_hidden_button_is_also_unclickable(self):
         """그리기와 클릭 판정이 갈리면 "안 보이는데 눌리는" 자리가 생긴다.
@@ -539,6 +580,9 @@ class TestConnectButton(unittest.TestCase):
     def test_right_click_menu_survives_as_a_fallback(self):
         """타이틀 바 버튼과 같은 이유 -- onMouseDown 이 안 불리는 버전이 있다."""
         self.assertIn("Refresh LM Studio models", self.javascript)
+        self.assertIn("Refresh the server model list", self.javascript)
+        # 메뉴도 버튼과 같은 조건을 써야 "버튼은 없는데 메뉴엔 있는" 이 안 생긴다.
+        self.assertIn("if (hasModelDropdown(this))", self.javascript)
 
 
 if __name__ == "__main__":
