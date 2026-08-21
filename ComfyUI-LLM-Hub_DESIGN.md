@@ -41,6 +41,13 @@
      이유는 발견성이다 -- llama.cpp 를 쓰려면 "openai_compat 이 그거다" 를 먼저
      알아야 했는데 드롭다운 어디에도 llama.cpp 라는 글자가 없었다.
      이름은 반드시 목록 맨 뒤에만 붙인다(저장된 워크플로우 보호). -->
+<!-- 수정(server_model): openai_compat 계열에도 모델 드롭다운을 붙였다.
+     lmstudio_model 과 같은 방식(INPUT_TYPES 가 조회 -> /object_info 재요청으로
+     갱신)이라 서버 라우트는 여전히 없다.
+     단, **loopback 주소만 조회한다.** INPUT_TYPES 는 /object_info 요청마다
+     불리므로, config 에 유료 API 주소를 적어둔 사람은 페이지를 열 때마다 남의
+     서버로 요청이 나가게 된다. 목록 하나 채우자고 할 일이 아니다.
+     토큰도 설정에 적힌 주소에만 보낸다(표준 포트 3개는 누구 서버인지 모른다). -->
 - F2. `system_prompt`, `prompt`(유저 프롬프트) 입력 → 생성 텍스트 `STRING` 출력
 - F3. 이미지 입력(옵션, ComfyUI `IMAGE`) → 멀티모달 경로로 전달
 - F4. `workspace_dir` 지정 시 해당 폴더 내 파일을 LLM이 읽을 수 있음(백엔드별 방식은 §8)

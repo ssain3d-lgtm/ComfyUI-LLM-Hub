@@ -385,6 +385,7 @@ const BACKEND_ONLY = {
   openai_base_url: ["openai_compat", "ollama", "vllm", "llamacpp"],
   claude_model: ["claude"],
   lmstudio_model: ["lmstudio"],
+  server_model: ["openai_compat", "ollama", "vllm", "llamacpp"],
   lmstudio_ttl_sec: ["lmstudio"],
   lmstudio_unload_after: ["lmstudio"],
   temperature: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp"],
@@ -748,10 +749,22 @@ function refreshPresetWidget(node, presets, select) {
 // INPUT_TYPES 를 다시 실행하므로, 그것만 다시 받아오면 목록이 갱신된다.
 // 덕분에 이 기능은 파이썬을 건드리지 않고 -- 즉 ComfyUI 재시작 없이 -- 끝난다.
 
-const MODEL_WIDGET = "lmstudio_model";
+// 모델 드롭다운은 이제 둘이다. lmstudio_model 은 LM Studio 를, server_model 은
+// 이 컴퓨터에 떠 있는 OpenAI 호환 서버(ollama/vllm/llamacpp)를 본다.
+// 둘 다 INPUT_TYPES 가 만들므로 같은 방법으로 한 번에 새로 받아온다.
+const MODEL_WIDGETS = ["lmstudio_model", "server_model"];
+// 어느 백엔드에서 어느 드롭다운을 보는지. BACKEND_ONLY 와 같은 내용이지만
+// 이쪽은 "새로고침 버튼이 무엇을 세어 보여줄지" 를 정하는 데 쓴다.
+const MODEL_WIDGET_FOR = {
+  lmstudio: "lmstudio_model",
+  openai_compat: "server_model",
+  ollama: "server_model",
+  vllm: "server_model",
+  llamacpp: "server_model",
+};
 const CONNECT_KEY = "_llmhubConnectLabel";
 const CONNECT_TIMER = "_llmhubConnectTimer";
-const CHECKING = "Checking LM Studio…";
+const CHECKING = "Checking servers…";
 
 // 조회는 페이지 전체에서 한 번에 하나만 나간다. 캔버스에 노드가 5개 있다고
 // 5번 물어볼 이유가 없고, LM Studio 가 꺼져 있으면 한 번에 3초씩 걸린다.
@@ -764,11 +777,15 @@ function fetchModelList() {
     .then((response) => response.json())
     .then((data) => {
       const input = data?.[NODE_NAME]?.input || {};
-      const spec =
-        (input.optional || {})[MODEL_WIDGET] || (input.required || {})[MODEL_WIDGET];
-      const values = spec?.[0];
-      if (!Array.isArray(values)) throw new Error("object_info has no model list");
-      return values;
+      const lists = {};
+      for (const name of MODEL_WIDGETS) {
+        const spec = (input.optional || {})[name] || (input.required || {})[name];
+        if (Array.isArray(spec?.[0])) lists[name] = spec[0];
+      }
+      if (!Object.keys(lists).length) {
+        throw new Error("object_info has no model list");
+      }
+      return lists;
     })
     .finally(() => {
       modelFetchInFlight = null;
@@ -778,18 +795,22 @@ function fetchModelList() {
 
 // 목록은 전역이다. 누른 노드만 고치면 나머지 노드는 낡은 채로 남아서
 // "어떤 노드는 되고 어떤 노드는 안 되는" 상태가 된다.
-function applyModelList(values) {
+function applyModelList(lists) {
   for (const node of app.graph?._nodes || []) {
     if (node.type !== NODE_NAME && node.comfyClass !== NODE_NAME) continue;
-    const widget = node.widgets?.find((w) => w.name === MODEL_WIDGET);
-    if (!widget?.options) continue;
-    widget.options.values = values;
+    let touched = false;
+    for (const [name, values] of Object.entries(lists)) {
+      const widget = node.widgets?.find((w) => w.name === name);
+      if (!widget?.options) continue;
+      widget.options.values = values;
+      touched = true;
+    }
     // 고른 값은 건드리지 않는다. 목록에 없는 이름이어도 파이썬의 VALIDATE_INPUTS
     // 가 통과시키므로 실행에는 지장이 없고, 여기서 (auto) 로 되돌리면 사용자가
     // 골라둔 모델이 조용히 바뀐다 -- 그게 목록이 비는 것보다 나쁘다.
-    node.setDirtyCanvas?.(true, true);
+    if (touched) node.setDirtyCanvas?.(true, true);
   }
-  return values;
+  return lists;
 }
 
 // 버튼 라벨을 잠깐 결과로 바꿨다가 되돌린다. 별도 알림 UI 를 만들지 않는 이유는
@@ -807,21 +828,31 @@ function setConnectLabel(node, text, holdMs) {
     : null;
 }
 
+// 이 노드가 실제로 보고 있는 드롭다운 이름. 없으면 새로고침할 것도 없다.
+function modelWidgetFor(node) {
+  const backend = node.widgets?.find((w) => w.name === "backend")?.value;
+  return MODEL_WIDGET_FOR[backend] || null;
+}
+
 function refreshModels(node) {
   if (node[CONNECT_KEY] === CHECKING) return; // 연타 무시
   setConnectLabel(node, CHECKING, 0);
   fetchModelList()
     .then(applyModelList)
-    .then((values) => {
+    .then((lists) => {
+      // 두 목록을 합쳐 세면 안 된다. LM Studio 를 쓰는 사람에게 ollama 모델
+      // 개수를 세어 보여주면 "찾았다" 는 말이 거짓이 된다.
+      const name = modelWidgetFor(node);
+      const values = (name && lists[name]) || [];
       const found = values.filter((v) => v !== AUTO_MODEL).length;
       if (found) {
         setConnectLabel(node, `Found ${found} model${found > 1 ? "s" : ""}`, 3000);
         return;
       }
-      // LM Studio 가 꺼져 있어도 /object_info 는 200 을 준다 -- 목록만 비어서
-      // 온다. 그래서 "응답 없음" 은 예외가 아니라 여기서 판별해야 한다.
-      // 파이썬의 list_model_ids 캐시가 10초라 즉시 다시 눌러도 같은 답이 온다.
-      setConnectLabel(node, "No models — is the LM Studio server on? (retry in 10s)", 4000);
+      // 서버가 꺼져 있어도 /object_info 는 200 을 준다 -- 목록만 비어서 온다.
+      // 그래서 "응답 없음" 은 예외가 아니라 여기서 판별해야 한다.
+      // 파이썬 쪽 캐시가 10초라 즉시 다시 눌러도 같은 답이 온다.
+      setConnectLabel(node, "No models — is the server running? (retry in 10s)", 4000);
     })
     .catch(() => setConnectLabel(node, "Could not reach ComfyUI", 4000));
 }
@@ -833,7 +864,9 @@ let autoRefreshTried = false;
 
 function maybeAutoRefresh(node) {
   if (autoRefreshTried) return;
-  const values = node.widgets?.find((w) => w.name === MODEL_WIDGET)?.options?.values;
+  const name = modelWidgetFor(node);
+  if (!name) return;
+  const values = node.widgets?.find((w) => w.name === name)?.options?.values;
   if (!Array.isArray(values) || values.length > 1) return;
   autoRefreshTried = true;
   fetchModelList()
@@ -843,6 +876,12 @@ function maybeAutoRefresh(node) {
 
 function isLmStudio(node) {
   return node.widgets?.find((w) => w.name === "backend")?.value === "lmstudio";
+}
+
+// 모델 드롭다운을 가진 백엔드에서만 새로고침 버튼을 보여준다. CLI 3종에는
+// 새로 받아올 목록 자체가 없어서 버튼이 할 일이 없다.
+function hasModelDropdown(node) {
+  return !!modelWidgetFor(node);
 }
 
 // --------------------------------------------------------------------------
@@ -894,9 +933,10 @@ const TITLE_BUTTONS = [
   },
   {
     key: "connect",
-    visible: isLmStudio,
+    visible: hasModelDropdown,
     icon: () => "⟳",
-    hint: () => "Refresh LM Studio models",
+    hint: (node) =>
+      isLmStudio(node) ? "Refresh LM Studio models" : "Refresh the server model list",
     // 누른 직후의 결과를 호버 없이도 잠깐 띄운다. 아이콘 버튼이라 라벨을
     // 바꿔서 알릴 자리가 없다 -- 대신 호버 설명 자리를 빌려 쓴다.
     notice: (node) => node[CONNECT_KEY],
@@ -1145,9 +1185,11 @@ app.registerExtension({
       });
       // 타이틀 바 버튼과 같은 이유로 여기에도 둔다 -- onMouseDown 이 안 불리는
       // 프론트엔드 버전에서도 목록을 되살릴 길이 남아 있어야 한다.
-      if (isLmStudio(this)) {
+      if (hasModelDropdown(this)) {
         options.push({
-          content: "Refresh LM Studio models",
+          content: isLmStudio(this)
+            ? "Refresh LM Studio models"
+            : "Refresh the server model list",
           callback: () => refreshModels(this),
         });
       }

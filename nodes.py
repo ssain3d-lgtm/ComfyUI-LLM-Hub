@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import traceback
 
-from .backends import BACKEND_NAMES, get_backend
+from .backends import BACKEND_NAMES, OPENAI_COMPAT_ALIASES, get_backend
 from .backends.base import LLMRequest, parse_extra_body, truncate_debug
 from .backends.lmstudio import list_model_ids
+from .backends.openai_compat import list_server_models
 from .utils import cancel, image_io, presets, stream, video_io
 
 # lmstudio_model 드롭다운의 첫 항목 (= 노드의 model 칸/설정을 따름)
@@ -37,8 +38,11 @@ WIDGET_ORDER = [
     "video_max_frames", "stream_view",
     "video_path", "mcp_config", "extra_args",
     "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
-    "openai_base_url", "system_preset", "batch_mode", "extra_body",
+    "openai_base_url", "system_preset", "batch_mode", "extra_body", "server_model",
 ]
+
+# server_model 드롭다운을 쓰는 백엔드 = openai_compat 과 그 별칭들.
+OPENAI_COMPAT_BACKENDS = ("openai_compat",) + tuple(OPENAI_COMPAT_ALIASES)
 
 # 이미지 배치를 어떻게 다룰지.
 #   all_in_one    : 배치 전체를 한 요청에 넣는다 (지금까지의 동작).
@@ -277,18 +281,27 @@ class LLMHubGenerate:
                                '"json_object"}}. Invalid JSON stops the run with an error '
                                "instead of being ignored. 'messages' and 'stream' are built "
                                "by the node and cannot be overridden."}),
+                # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
+                "server_model": ([AUTO_MODEL] + list_server_models(), {
+                    "tooltip": "[openai_compat/ollama/vllm/llamacpp] Model dropdown, read "
+                               "from whichever of those servers is running on this machine. "
+                               "Start the server, then press the refresh button on the title "
+                               "bar. (auto) = follow the model field above. Only local "
+                               "servers are listed — for a remote or paid endpoint, type the "
+                               "name into model instead."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
 
     @classmethod
-    def VALIDATE_INPUTS(cls, input_types=None, lmstudio_model=None, system_preset=None):
+    def VALIDATE_INPUTS(cls, input_types=None, lmstudio_model=None, system_preset=None,
+                        server_model=None):
         """가변 목록인 두 입력만 검증을 건너뛴다(나머지는 정상 검증됨).
 
-        lmstudio_model 은 LM Studio 를 조회해 만든 목록이라 서버가 꺼졌거나
-        모델이 언로드되면 줄어든다. system_preset 은 프리셋 파일에서 오므로
-        편집창에서 프리셋을 지우거나 이름을 바꾸면 줄어든다.
+        lmstudio_model / server_model 은 서버를 조회해 만든 목록이라 서버가
+        꺼졌거나 모델이 언로드되면 줄어든다. system_preset 은 프리셋 파일에서
+        오므로 편집창에서 프리셋을 지우거나 이름을 바꾸면 줄어든다.
 
         그때 ComfyUI 기본 검증이 저장된 값을 거부해 워크플로우 실행 자체가
         실패한다 -- 해당 기능을 안 쓰는 경우까지 같이 죽는다.
@@ -328,6 +341,7 @@ class LLMHubGenerate:
         mcp_config="",
         extra_args="",
         system_preset=presets.PRESET_NONE,
+        server_model=AUTO_MODEL,
         batch_mode=BATCH_ALL,
         extra_body="",
         unique_id=None,
@@ -394,6 +408,12 @@ class LLMHubGenerate:
                 chosen_model = lmstudio_model
             elif backend == "claude" and claude_model and claude_model != AUTO_MODEL:
                 chosen_model = claude_model
+            elif (
+                backend in OPENAI_COMPAT_BACKENDS
+                and server_model
+                and server_model != AUTO_MODEL
+            ):
+                chosen_model = server_model
 
             # 이미지 배치를 장별로 쪼갤지 결정한다.
             # 비디오가 있으면 쪼개지 않는다 -- 프레임들은 한 영상의 조각이라
