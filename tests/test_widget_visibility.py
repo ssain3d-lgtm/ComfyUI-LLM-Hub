@@ -135,22 +135,74 @@ class TestWidgetVisibility(unittest.TestCase):
             "BACKEND_ONLY 에도 들어가면 어떤 백엔드에서는 펼쳐도 안 나온다",
         )
 
+    def _box_heights(self):
+        """JS 의 BOX_HEIGHTS 리터럴을 {위젯이름: 높이} 로 읽는다."""
+        body = self.javascript.split("const BOX_HEIGHTS = {", 1)[1].split("\n};", 1)[0]
+        body = "\n".join(l for l in body.splitlines() if not l.strip().startswith("//"))
+        return {name: value for name, value in re.findall(r"(\w+)\s*:\s*([\w.]+)", body)}
+
     def test_the_prompt_box_gets_the_freed_space(self):
         """system_prompt 를 접었으면 그 자리는 prompt 가 받아야 한다.
 
         접기만 하고 끝내면 노드만 작아진다 -- 정작 매번 쓰는 칸은 그대로다.
         """
-        body = self._body("function applyPromptSize")
+        body = self._body("function applyBoxSize")
         # 구/신 프론트엔드가 서로 다른 쪽을 본다. 한쪽만 걸면 버전에 따라 무시된다.
         self.assertIn("widget.computeSize", body)
         self.assertIn("widget.computeLayoutSize", body)
-        self.assertIn("PROMPT_MIN_HEIGHT", body)
+        self.assertEqual(self._box_heights().get("prompt"), "PROMPT_MIN_HEIGHT")
 
     def test_the_prompt_size_is_not_wiped_when_widgets_are_reshown(self):
         """보이게 만드는 자리에서 computeSize 를 지운다. 거기서 다시 안 주면
         고급 옵션을 한 번 접었다 펴는 순간 프롬프트 칸이 원래대로 줄어든다."""
         body = self._body("const apply = () =>")
-        self.assertIn('if (w.name === "prompt") applyPromptSize(w)', body)
+        self.assertIn("applyBoxSize(w)", body)
+
+    def test_every_multiline_box_has_a_declared_height(self):
+        """멀티라인 칸은 전부 BOX_HEIGHTS 에 있어야 한다.
+
+        빠뜨리면 두 가지가 한꺼번에 어긋난다. 화면에서는 그 칸이 CSS 기본
+        min-height 만큼 제멋대로 자라 노드가 길어지고, 계산에서는 node.computeSize()
+        가 -- litegraph 계산이라 widget.computeSize 만 본다 -- 그 칸을 한 줄로
+        센다. resizeToWidgets 는 그 차이로 노드 높이를 조절하므로, 접을 때
+        실제로 사라진 높이만큼 줄지 않고 차액이 빈칸으로 남는다.
+        """
+        spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()
+        multiline = {
+            name for group in ("required", "optional")
+            for name, decl in (spec.get(group) or {}).items()
+            if isinstance(decl, tuple) and len(decl) > 1
+            and isinstance(decl[1], dict) and decl[1].get("multiline")
+        }
+        self.assertTrue(multiline, "멀티라인 위젯을 못 찾았다 — INPUT_TYPES 구조가 바뀌었나?")
+        missing = sorted(multiline - set(self._box_heights()))
+        self.assertEqual(missing, [], f"BOX_HEIGHTS 에 빠진 멀티라인 칸: {missing}")
+
+    def test_hiding_zeroes_both_size_apis(self):
+        """보일 때 computeLayoutSize 를 대입하므로, 숨길 때도 대입해야 한다.
+
+        대입은 프로토타입을 가린다. 그래서 "type 이 hidden 이면 높이 0" 이라는
+        DOMWidgetImpl 의 처리에 더는 도달하지 못하고, 접어도 그 칸이 자리를
+        그대로 차지한다.
+        """
+        body = self._body("const apply = () =>")
+        hidden_branch = body.split("} else {", 1)[1]
+        self.assertIn("computeSize", hidden_branch)
+        self.assertIn("computeLayoutSize", hidden_branch)
+        self.assertIn("minHeight: 0", hidden_branch)
+
+    def test_the_old_slack_is_cleared_once(self):
+        """delta 방식은 이미 눌러앉은 빈칸을 영원히 유지한다.
+
+        펼치면 +N, 접으면 -N 이라 저장된 크기로 정확히 돌아온다. 예전 버전이
+        남긴 공백은 저절로 사라지지 않으므로 한 번은 걷어내야 한다. properties
+        에 표시를 남겨 두 번 하지 않는다 -- 사용자가 늘려둔 높이를 매번 깎으면
+        그건 그것대로 고장이다.
+        """
+        body = self._body("function resizeToWidgets")
+        self.assertIn("previous === undefined", body)
+        self.assertIn("properties", body)
+        self.assertIn("setSize", body)
 
     def test_reshowing_restores_the_dom_widget_height_instead_of_wiping_it(self):
         """멀티라인 칸을 되살릴 때는 대입이 아니라 delete 여야 한다.

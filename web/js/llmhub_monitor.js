@@ -353,13 +353,33 @@ function viewMode(node) {
 //
 // DOM 위젯이라 숨기는 방법이 위젯들과 다르다. 어느 프론트엔드가 무엇을 보는지
 // 확인할 수 없어 셋 다 건다: 실제 요소, 그리고 두 가지 크기 계산 API.
-// prompt 는 ComfyUI 코어가 만드는 멀티라인 위젯이다. 높이를 직접 그리지 않고
-// computeSize 로 "이만큼 자리를 잡아달라" 고만 말한다. 구/신 프론트엔드가 서로
-// 다른 쪽을 보므로 둘 다 건다(모니터 패널에서 이미 확인한 방식이다).
-function applyPromptSize(widget) {
-  if (!widget) return;
-  widget.computeSize = (width) => [width, PROMPT_MIN_HEIGHT];
-  widget.computeLayoutSize = () => ({ minHeight: PROMPT_MIN_HEIGHT, minWidth: 200 });
+// 멀티라인 칸의 높이. 값을 정해두면 두 가지가 한꺼번에 해결된다.
+//
+// 1) 화면. 안 정해주면 각자 CSS 의 --comfy-widget-min-height 만큼 자란다.
+//    system_prompt 는 ✎ 편집창에서 쓰라고 접어둔 칸이고 extra_body 는 대개
+//    비어 있는데, 펼치면 둘이 노드를 화면 밖까지 늘려놓는다.
+// 2) 계산. node.computeSize() 는 litegraph 것이라 widget.computeSize 만 본다.
+//    값이 없으면 DOM 위젯을 한 줄(20px)로 세는데, 실제 레이아웃은
+//    computeLayoutSize 로 훨씬 크게 잡는다. resizeToWidgets 는 그 차이(delta)로
+//    노드 높이를 조절하므로, 둘이 어긋나면 접을 때 실제로 사라진 높이만큼 줄지
+//    않고 차액이 빈칸으로 눌러앉는다 -- 모니터 창 아래에 남던 그 공백이다.
+//
+// 그래서 두 API 에 같은 값을 준다. 새 멀티라인 위젯을 추가하면 여기에도 넣어야
+// 하고, tests/test_widget_visibility.py 가 빠뜨린 것을 잡는다.
+const BOX_HEIGHTS = {
+  prompt: PROMPT_MIN_HEIGHT,
+  // 노드에서는 "들어 있는지 훑어보는" 용도다. 편집은 ✎ 창에서 한다.
+  system_prompt: 110,
+  // 대개 비어 있거나 JSON 두어 줄이다.
+  extra_body: 64,
+};
+
+function applyBoxSize(widget) {
+  const height = BOX_HEIGHTS[widget && widget.name];
+  if (!height) return false;
+  widget.computeSize = (width) => [width, height];
+  widget.computeLayoutSize = () => ({ minHeight: height, minWidth: 200 });
+  return true;
 }
 
 function applyMonitorVisibility(node, mode) {
@@ -455,6 +475,10 @@ const SHOW_ADVANCED_PROP = "showAdvanced";
 // 대신 "최소 높이가 얼마나 변했는지"만 재서 그 차이만큼 더하고 뺀다.
 const LAST_MIN_KEY = "_llmhubLastMin";
 
+// 예전 계산이 남긴 빈칸을 한 번 걷어냈다는 표시. properties 라 워크플로우에
+// 저장된다 -- 두 번 걷어내면 사용자가 손으로 늘려둔 높이를 열 때마다 깎는다.
+const HEIGHT_FIXED_PROP = "llmhubHeightFixed";
+
 function resizeToWidgets(node) {
   let min;
   try {
@@ -467,9 +491,21 @@ function resizeToWidgets(node) {
   const previous = node[LAST_MIN_KEY];
   node[LAST_MIN_KEY] = min;
 
-  // 첫 호출과 워크플로우 로드 직후에는 조정하지 않는다.
+  // 첫 호출과 워크플로우 로드 직후에는 delta 를 적용하지 않는다.
   // 저장된 크기는 이미 그때 상태에 맞는 값이라 여기서 또 빼면 너무 작아진다.
-  if (previous === undefined) return;
+  if (previous === undefined) {
+    // 다만 예전 계산이 남긴 빈칸은 여기서 한 번 걷어낸다. DOM 위젯을 한 줄로
+    // 세던 시절의 node.size 에는 실제로 사라진 높이만큼의 공백이 눌러앉아
+    // 있는데, delta 방식은 그걸 영원히 유지한다 -- 펼쳤다 접으면 +N/-N 이라
+    // 저장된 그 크기로 정확히 돌아온다. 저절로는 사라지지 않는다.
+    if (node.properties && !node.properties[HEIGHT_FIXED_PROP]) {
+      node.properties[HEIGHT_FIXED_PROP] = 1;
+      if ((node.size?.[1] ?? 0) > min) {
+        node.setSize?.([node.size?.[0] ?? node.computeSize()[0], min]);
+      }
+    }
+    return;
+  }
 
   const delta = min - previous;
   if (delta === 0) return;
@@ -518,11 +554,12 @@ function setupBackendToggle(node) {
         // 높이를 못 받아 윗부분이 잘린다(실측: 프론트엔드 1.49.6).
         // delete 는 인스턴스 속성만 지워 프로토타입이 다시 보이게 한다.
         //
-        // prompt 는 여기서 지운 뒤 아래에서 다시 준다. 안 주면 고급 옵션을
-        // 한 번 접었다 펴는 순간 프롬프트 칸이 원래대로 줄어든다.
+        // 멀티라인 칸은 지운 뒤 아래에서 정해진 높이를 다시 준다. 안 주면
+        // 고급 옵션을 한 번 접었다 펴는 순간 프롬프트 칸이 줄어들고, 노드
+        // 높이 계산도 실제 레이아웃과 어긋난다(BOX_HEIGHTS 주석 참고).
         delete w.computeSize;
         delete w.computeLayoutSize;
-        if (w.name === "prompt") applyPromptSize(w);
+        applyBoxSize(w);
       } else {
         // type 을 바꾸는 건 예전 관용구고, 지금 프론트엔드는 w.hidden 을 본다.
         // 어느 쪽을 보는 버전인지 확인할 방법이 없어 둘 다 건다 — 한쪽만 걸면
@@ -530,6 +567,10 @@ function setupBackendToggle(node) {
         w.type = "hidden";
         w.hidden = true;
         w.computeSize = () => [0, -4];
+        // computeLayoutSize 도 직접 0 을 넣는다. 보일 때 대입해 두므로
+        // 프로토타입이 가려져 있고, "type 이 hidden 이면 0" 이라는
+        // DOMWidgetImpl 의 처리에 더는 도달하지 못한다.
+        w.computeLayoutSize = () => ({ minHeight: 0, maxHeight: 0, minWidth: 0 });
       }
     }
 
