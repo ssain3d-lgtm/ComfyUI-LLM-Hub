@@ -426,6 +426,24 @@ class LLMHubGenerate:
             runs = [[path] for path in image_paths] if per_image else [image_paths]
 
             impl = get_backend(backend)
+
+            # openai_compat 만 노드에서 주소를 갈아탈 수 있다.
+            # 루프 밖에서 한 번만 한다 -- 장마다 같은 값이고, 주소가 틀렸으면
+            # 40장을 저장해 두고 첫 장에서 멈추는 것보다 여기서 멈추는 게 낫다.
+            # 잘못된 주소(스킴 없음)는 extra_body 오타와 같은 모양으로 status 에
+            # 말해준다. 바깥 except 로 흘리면 "internal node error" 가 되어
+            # 사용자 입력 문제가 버그처럼 보인다.
+            if hasattr(impl, "apply_base_url"):
+                try:
+                    impl.apply_base_url(_as_text(openai_base_url))
+                except ValueError as exc:
+                    status_out = f"error: {exc}"
+                    emitter.finish(status=status_out, text="")
+                    return {
+                        "ui": {"text": [""], "llmhub_status": [status_out]},
+                        "result": ("", status_out, _as_text(openai_base_url)),
+                    }
+
             texts, statuses, run_debug = [], [], []
             total_duration = 0.0
 
@@ -460,9 +478,6 @@ class LLMHubGenerate:
                     emitter=emitter,
                 )
 
-                # openai_compat 만 노드에서 주소를 갈아탈 수 있다.
-                if hasattr(impl, "apply_base_url"):
-                    impl.apply_base_url(req.base_url_override)
                 response = impl.generate(req)
 
                 # 실패한 장도 빈 문자열로 자리를 채운다. 안 그러면 결과의 n번째가

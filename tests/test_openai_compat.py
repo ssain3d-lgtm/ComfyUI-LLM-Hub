@@ -369,6 +369,78 @@ class TestBaseUrl(unittest.TestCase):
         self.assertIn("11434", resp.status)  # 흔한 포트 안내
 
 
+class TestBaseUrlSentinel(unittest.TestCase):
+    """실제 증상(2026-08-22): llamacpp 로 바꾸자마자
+    `MissingSchema: Invalid URL '(auto)/v1/chat/completions'`.
+
+    openai_base_url 칸에 드롭다운 표시값 "(auto)" 가 들어 있었다 -- 예전
+    위젯 순서 밀림 때 옆 칸 값이 흘러들어 저장된 것이다. lmstudio/gemini 에서는
+    이 칸을 안 보니 몇 달을 조용히 살아남았다. 주소 칸의 "(auto)" 는 주소가
+    아니므로 빈 값과 같이 취급하고, 스킴 없는 주소는 requests 가 알 수 없는
+    예외를 내기 전에 여기서 사람이 읽을 수 있는 말로 멈춘다.
+    """
+
+    def test_auto_sentinel_keeps_the_alias_port(self):
+        impl = backends.get_backend("llamacpp")
+        impl.apply_base_url(nodes_mod.AUTO_MODEL)
+        self.assertEqual(impl.base_url, "http://127.0.0.1:8080")
+
+    def test_auto_sentinel_is_case_and_space_insensitive(self):
+        impl = backends.get_backend("llamacpp")
+        impl.apply_base_url("  (AUTO) ")
+        self.assertEqual(impl.base_url, "http://127.0.0.1:8080")
+
+    def test_a_scheme_less_address_is_refused_with_a_hint(self):
+        impl = backends.get_backend("llamacpp")
+        with self.assertRaises(ValueError) as ctx:
+            impl.apply_base_url("localhost:8080")
+        self.assertIn("http", str(ctx.exception))
+        self.assertIn("localhost:8080", str(ctx.exception))
+        # 거절했으면 주소는 그대로여야 한다
+        self.assertEqual(impl.base_url, "http://127.0.0.1:8080")
+
+    def test_a_real_address_still_wins(self):
+        impl = backends.get_backend("llamacpp")
+        impl.apply_base_url("http://127.0.0.1:9999/")
+        self.assertEqual(impl.base_url, "http://127.0.0.1:9999")
+
+    def test_https_is_accepted_too(self):
+        impl = backends.get_backend("openai_compat")
+        impl.apply_base_url("https://example.invalid/v1")
+        self.assertEqual(impl.base_url, "https://example.invalid/v1")
+
+    def test_the_node_turns_the_refusal_into_a_status_not_a_crash(self):
+        """노드는 예외를 밖으로 던지지 않는다. 그렇다고 'internal node error' 로
+        뭉개면 사용자 입력 문제가 버그처럼 보인다. extra_body 오타와 같은
+        모양으로 status 에 그대로 말해준다."""
+        out = nodes_mod.LLMHubGenerate().generate(
+            backend="llamacpp", prompt="hi", system_prompt="", model="m",
+            file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
+            timeout_sec=10, seed=0, stream_view="off",
+            openai_base_url="localhost:8080",
+        )
+        status = out["result"][1]
+        self.assertTrue(status.startswith("error:"), status)
+        self.assertNotIn("internal node error", status)
+        self.assertIn("http", status)
+        self.assertEqual(out["result"][0], "")
+
+    def test_the_node_runs_with_the_sentinel_in_the_box(self):
+        """저장된 워크플로우 그대로(칸에 '(auto)') 돌려도 표준 포트로 나가야 한다."""
+        with MockLMStudio(script=[{"content": "hello"}]) as server:
+            cfg = {"openai_compat": {"base_url": server.base_url}}
+            with mock.patch.object(nodes_mod, "get_backend",
+                                   return_value=oc_mod.OpenAICompatBackend(config=cfg)):
+                out = nodes_mod.LLMHubGenerate().generate(
+                    backend="openai_compat", prompt="hi", system_prompt="", model="m",
+                    file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
+                    timeout_sec=10, seed=0, stream_view="off",
+                    openai_base_url=nodes_mod.AUTO_MODEL,
+                )
+        self.assertEqual(out["result"][1], "ok", out["result"][2][:300])
+        self.assertEqual(out["result"][0], "hello")
+
+
 class TestNoLMStudioExtras(unittest.TestCase):
     def test_unload_explains_instead_of_running_lms(self):
         """lms unload 는 LM Studio CLI 다. 여기서 실행하면 안 된다."""

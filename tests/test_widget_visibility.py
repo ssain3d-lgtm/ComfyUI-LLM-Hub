@@ -336,6 +336,25 @@ class TestWidgetVisibility(unittest.TestCase):
         after = self.javascript.split("onConfigure", 1)[1]
         self.assertIn("_llmhubApplyBackendToggle", after)
 
+    def test_a_stale_auto_in_the_address_box_is_cleared_on_load(self):
+        """주소 칸의 "(auto)" 는 주소가 아니라 옆 드롭다운에서 밀려 들어온 값이다.
+
+        실제 증상: llamacpp 로 바꾸자 '(auto)/v1/chat/completions' 로 요청이
+        나가 MissingSchema 로 죽었다. 그 셋에서는 칸이 고급으로 접혀 있어
+        사용자가 보고 고칠 수도 없다 -- 워크플로우를 열 때 비워야 한다.
+        """
+        self.assertIn("function clearStaleAutoAddress", self.javascript)
+        body = self.javascript.split("function clearStaleAutoAddress", 1)[1]
+        body = body.split("\n}", 1)[0]
+        self.assertIn('"openai_base_url"', body)
+        # 리터럴을 따로 적지 않고 AUTO_MODEL 상수와 비교한다(파이썬 쪽과 같은 값).
+        self.assertIn("AUTO_MODEL", body)
+        self.assertIn('.value = ""', body)
+        # onConfigure 안에서 불려야 저장된 워크플로우에 적용된다.
+        after = self.javascript.split("nodeType.prototype.onConfigure = function", 1)[1]
+        hook = after.split("return result;", 1)[0]
+        self.assertIn("clearStaleAutoAddress(this)", hook)
+
 
 class TestAdvancedButton(unittest.TestCase):
     """고급 옵션 접기/펴기 버튼 (타이틀 바에 직접 그린다)."""

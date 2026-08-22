@@ -32,6 +32,11 @@ from .lmstudio import LMStudioBackend
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"  # Ollama 기본 포트
 
+# 드롭다운 표시값. nodes.AUTO_MODEL 과 같은 글자다. 여기서 nodes 를 임포트하면
+# 순환(nodes -> backends -> nodes)이 되므로 글자를 복사해 둔다 -- 테스트가
+# nodes.AUTO_MODEL 로 이 함수를 불러 둘이 같음을 확인한다.
+AUTO_SENTINEL = "(auto)"
+
 # 사용자가 자주 쓸 주소. README 와 노드 tooltip 에서 함께 쓴다.
 KNOWN_SERVERS = {
     "ollama": "http://127.0.0.1:11434",
@@ -67,10 +72,26 @@ class OpenAICompatBackend(LMStudioBackend):
         self.default_unload_after = False
 
     def apply_base_url(self, base_url: str) -> None:
-        """노드에서 넘어온 주소로 갈아탄다. 빈 값이면 설정값을 유지한다."""
+        """노드에서 넘어온 주소로 갈아탄다. 빈 값이면 설정값을 유지한다.
+
+        "(auto)" 도 빈 값으로 본다. 실제 증상(2026-08-22): 예전 위젯 순서
+        밀림 때 옆 드롭다운의 "(auto)" 가 openai_base_url 칸에 저장된 워크플로우가
+        있었고, llamacpp 로 바꾸는 순간 requests 가
+        `MissingSchema: Invalid URL '(auto)/v1/chat/completions'` 를 냈다.
+        lmstudio/gemini 에서는 이 칸을 안 보니 오래 숨어 있었다.
+
+        스킴 없는 주소("localhost:8080")는 requests 의 InvalidSchema 보다 먼저
+        사람이 읽을 수 있는 말로 멈춘다. 노드는 이 ValueError 를 status 로 바꾼다.
+        """
         url = (base_url or "").strip().rstrip("/")
-        if url:
-            self.base_url = url
+        if not url or url.lower() == AUTO_SENTINEL:
+            return
+        if not url.lower().startswith(("http://", "https://")):
+            raise ValueError(
+                f"openai_base_url must start with http:// or https:// (got '{url}'). "
+                "Leave the box empty to use the standard port."
+            )
+        self.base_url = url
 
     def _build_payload(self, req: LLMRequest, messages: list, model: str) -> dict:
         payload = super()._build_payload(req, messages, model)

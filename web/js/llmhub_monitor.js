@@ -613,6 +613,21 @@ function setupBackendToggle(node) {
   apply();
 }
 
+// 주소 칸에 "(auto)" 가 들어 있으면 비운다.
+//
+// "(auto)" 는 모델 드롭다운의 값이지 주소가 아니다. openai_base_url 을 위젯
+// 중간에 끼워 넣었던 시절에 저장한 워크플로우는 옆 드롭다운의 "(auto)" 가
+// 이 칸으로 한 칸 밀려 들어가 있다(nodes.py 의 WIDGET_ORDER 주석). lmstudio 나
+// CLI 백엔드에서는 이 칸을 안 읽어서 몇 달을 조용히 살아남다가, llamacpp 로
+// 바꾸는 순간 '(auto)/v1/chat/completions' 라는 주소로 요청이 나가 죽는다.
+// 게다가 이 셋에서는 칸이 고급으로 접혀 있어(ADVANCED_FOR) 사용자가 볼 수도 없다.
+// 빈 값이면 표준 포트/config 값이 쓰이므로, 비우는 것이 곧 원래 의도다.
+function clearStaleAutoAddress(node) {
+  const w = node.widgets?.find((w) => w.name === "openai_base_url");
+  if (typeof w?.value !== "string") return;
+  if (w.value.trim().toLowerCase() === AUTO_MODEL.toLowerCase()) w.value = "";
+}
+
 function toggleAdvanced(node) {
   node.properties[SHOW_ADVANCED_PROP] = !node.properties?.[SHOW_ADVANCED_PROP];
   node._llmhubApplyBackendToggle?.();
@@ -1306,6 +1321,7 @@ app.registerExtension({
     const onConfigure = nodeType.prototype.onConfigure;
     nodeType.prototype.onConfigure = function () {
       const result = onConfigure?.apply(this, arguments);
+      clearStaleAutoAddress(this);
       // 저장된 크기가 이미 복원될 상태의 값이다. 이 apply 는 위젯 표시만
       // 맞추고 노드 크기는 건드리면 안 된다(RESTORE_FLAG 주석).
       this[RESTORE_FLAG] = true;
