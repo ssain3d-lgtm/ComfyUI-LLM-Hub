@@ -475,9 +475,27 @@ const SHOW_ADVANCED_PROP = "showAdvanced";
 // 대신 "최소 높이가 얼마나 변했는지"만 재서 그 차이만큼 더하고 뺀다.
 const LAST_MIN_KEY = "_llmhubLastMin";
 
-// 예전 계산이 남긴 빈칸을 한 번 걷어냈다는 표시. properties 라 워크플로우에
-// 저장된다 -- 두 번 걷어내면 사용자가 손으로 늘려둔 높이를 열 때마다 깎는다.
+// 예전 계산이 남긴 빈칸을 걷어냈다는 표시. properties 라 워크플로우에 저장된다
+// -- 매번 걷어내면 사용자가 손으로 늘려둔 높이를 열 때마다 깎는다. 값이 버전인
+// 이유는, 1 을 찍어둔 노드가 이미 배포돼 있는데 그때의 정리가 엉뚱한 시점에
+// 돌아 아무 일도 못 했기 때문이다(아래 RESTORE_FLAG 주석 참고).
 const HEIGHT_FIXED_PROP = "llmhubHeightFixed";
+const HEIGHT_FIX_VERSION = 2;
+
+// 저장된 워크플로우를 복원하는 동안 켜지는 표시.
+//
+// apply() 는 노드 하나당 두 번 돈다. onNodeCreated 에서 한 번 -- 이때 properties
+// 는 아직 기본값이라 "고급 접힘" 상태의 최소 높이가 기록된다 -- 그리고
+// onConfigure 가 showAdvanced 를 복원한 뒤 또 한 번. 두 번째의 delta 는 곧
+// "고급을 펼치면서 늘어난 높이" 인데, 저장된 node.size 는 이미 펼친 상태의
+// 값이다. 그래서 열 때마다 그 delta 가 통째로 더해졌다.
+//
+// 실측: size[1] 977.8580392614676 -> 1495.8580392614676 (+518.0). 소수점 아래가
+// 그대로인 것이 정수 delta 가 더해졌다는 증거였다. 저장/열기를 반복하면 계속
+// 누적된다.
+//
+// 복원 중에는 최소 높이만 기록하고 노드는 건드리지 않는다.
+const RESTORE_FLAG = "_llmhubRestoring";
 
 function resizeToWidgets(node) {
   let min;
@@ -491,21 +509,24 @@ function resizeToWidgets(node) {
   const previous = node[LAST_MIN_KEY];
   node[LAST_MIN_KEY] = min;
 
-  // 첫 호출과 워크플로우 로드 직후에는 delta 를 적용하지 않는다.
-  // 저장된 크기는 이미 그때 상태에 맞는 값이라 여기서 또 빼면 너무 작아진다.
-  if (previous === undefined) {
-    // 다만 예전 계산이 남긴 빈칸은 여기서 한 번 걷어낸다. DOM 위젯을 한 줄로
-    // 세던 시절의 node.size 에는 실제로 사라진 높이만큼의 공백이 눌러앉아
-    // 있는데, delta 방식은 그걸 영원히 유지한다 -- 펼쳤다 접으면 +N/-N 이라
-    // 저장된 그 크기로 정확히 돌아온다. 저절로는 사라지지 않는다.
-    if (node.properties && !node.properties[HEIGHT_FIXED_PROP]) {
-      node.properties[HEIGHT_FIXED_PROP] = 1;
+  // 복원 중이면 기준만 잡고 나간다. 저장된 크기가 이미 이 상태의 값이라,
+  // 여기서 delta 를 더하면 열 때마다 그만큼 길어진다(RESTORE_FLAG 주석).
+  if (node[RESTORE_FLAG]) {
+    // 이 자리가 예전 크기를 정리할 유일한 시점이기도 하다. node.size 에
+    // 저장값이 들어온 뒤이고, min 은 복원된 상태의 것이다. onNodeCreated
+    // 시점에는 둘 다 기본값이라 정리할 것이 없었다 -- 그래서 이전 버전의
+    // 정리(표시값 1)는 아무 일도 하지 못했고, 표시만 남았다.
+    if (node.properties && node.properties[HEIGHT_FIXED_PROP] !== HEIGHT_FIX_VERSION) {
+      node.properties[HEIGHT_FIXED_PROP] = HEIGHT_FIX_VERSION;
       if ((node.size?.[1] ?? 0) > min) {
         node.setSize?.([node.size?.[0] ?? node.computeSize()[0], min]);
       }
     }
     return;
   }
+
+  // 첫 호출에도 적용하지 않는다. 아직 저장값이 들어오기 전이라 기준만 잡는다.
+  if (previous === undefined) return;
 
   const delta = min - previous;
   if (delta === 0) return;
@@ -1285,7 +1306,16 @@ app.registerExtension({
     const onConfigure = nodeType.prototype.onConfigure;
     nodeType.prototype.onConfigure = function () {
       const result = onConfigure?.apply(this, arguments);
-      this._llmhubApplyBackendToggle?.();
+      // 저장된 크기가 이미 복원될 상태의 값이다. 이 apply 는 위젯 표시만
+      // 맞추고 노드 크기는 건드리면 안 된다(RESTORE_FLAG 주석).
+      this[RESTORE_FLAG] = true;
+      try {
+        this._llmhubApplyBackendToggle?.();
+      } finally {
+        // 던지더라도 반드시 내린다. 켜진 채로 남으면 그 뒤의 백엔드 전환이나
+        // 고급 토글이 노드 높이를 영영 못 고친다.
+        this[RESTORE_FLAG] = false;
+      }
       return result;
     };
 
