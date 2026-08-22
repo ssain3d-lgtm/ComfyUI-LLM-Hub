@@ -37,6 +37,11 @@ def _backend_only_map(javascript):
     return out
 
 
+# 저장된 워크플로우를 복원하는 동안 켜지는 표시. 이 사이의 apply 는 최소 높이만
+# 기록하고 노드 크기는 건드리지 않는다 -- 저장된 크기가 이미 그 상태의 값이다.
+RESTORE_FLAG = "_llmhubRestoring"
+
+
 class TestWidgetVisibility(unittest.TestCase):
     def setUp(self):
         self.javascript = _javascript()
@@ -190,6 +195,29 @@ class TestWidgetVisibility(unittest.TestCase):
         self.assertIn("computeSize", hidden_branch)
         self.assertIn("computeLayoutSize", hidden_branch)
         self.assertIn("minHeight: 0", hidden_branch)
+
+    def test_restoring_a_saved_node_does_not_resize_it(self):
+        """워크플로우를 열 때마다 노드가 길어지던 실측 버그.
+
+        apply() 는 두 번 돈다. onNodeCreated 에서 한 번 -- 이때는 properties 가
+        아직 기본값이라 고급이 접힌 상태의 최소 높이를 기록한다 -- 그리고
+        onConfigure 가 showAdvanced=true 를 복원한 뒤 또 한 번. 두 번째의 delta 는
+        "펼치면서 늘어난 만큼" 인데, 저장된 size 는 이미 펼친 상태의 값이다.
+        그래서 열 때마다 그 delta 가 통째로 더해진다.
+
+        실측: size[1] 977.8580392614676 -> 1495.8580392614676. 소수점 아래가
+        그대로인 것이 정수 delta 가 더해졌다는 증거였다.
+
+        복원 중에는 최소 높이만 기록하고 노드는 건드리지 않아야 한다.
+        """
+        self.assertIn(f'const RESTORE_FLAG = "{RESTORE_FLAG}"', self.javascript)
+        hook = self.javascript.split("nodeType.prototype.onConfigure = function", 1)[1]
+        hook = hook.split("\n    };", 1)[0]
+        self.assertIn("RESTORE_FLAG", hook)
+        self.assertIn("finally", hook,
+                      "복원 플래그는 apply 가 던져도 반드시 내려가야 한다")
+        body = self._body("function resizeToWidgets")
+        self.assertIn("RESTORE_FLAG", body)
 
     def test_the_old_slack_is_cleared_once(self):
         """delta 방식은 이미 눌러앉은 빈칸을 영원히 유지한다.
