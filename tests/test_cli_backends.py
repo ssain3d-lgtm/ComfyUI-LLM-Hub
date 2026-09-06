@@ -398,6 +398,35 @@ class TestCodexBackend(unittest.TestCase):
             )
         self.assertIn("not supported in v1", resp.raw_debug)
 
+    def test_abnormal_exit_is_not_ok_even_with_text(self):
+        """잘린 답을 성공으로 위장하면 다운스트림이 그대로 쓴다.
+
+        codex 만 "텍스트가 있으면 ok" 로 남아 있어서, 종료 코드 1 에 부분 답이
+        온 실행이 초록불로 나갔다. claude/gemini 는 원래 이렇게 하고 있었다.
+        """
+        fake = FakeCli(
+            code=1,
+            stderr="stream error: exceeded retry limit",
+            write_last_message="부분적인 답",
+        )
+        with _patch(codex_mod, fake):
+            response = codex_mod.CodexBackend().generate(
+                LLMRequest("codex", "", "", "안녕")
+            )
+        self.assertTrue(response.status.startswith("error:"), response.status)
+        self.assertIn("exit 1", response.status)
+        # 받은 데까지는 버리지 않는다.
+        self.assertEqual(response.text, "부분적인 답")
+
+    def test_a_clean_exit_with_text_is_still_ok(self):
+        """위 규칙이 정상 경로까지 잡아버리면 안 된다."""
+        fake = FakeCli(code=0, write_last_message="답")
+        with _patch(codex_mod, fake):
+            response = codex_mod.CodexBackend().generate(
+                LLMRequest("codex", "", "", "안녕")
+            )
+        self.assertEqual(response.status, "ok")
+
     def test_login_error_detection(self):
         fake = FakeCli(code=1, stderr="Please sign in with codex login", write_last_message="")
         with _patch(codex_mod, fake):

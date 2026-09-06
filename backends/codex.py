@@ -181,9 +181,18 @@ class CodexBackend(BaseBackend):
             if text:
                 debug += "\n(the -o file was empty; using stdout)"
 
-        if code != 0 and not text:
+        if code != 0:
+            # 텍스트가 좀 왔더라도 종료 코드가 0 이 아니면 정상 완료가 아니다.
+            # 잘린 답을 성공으로 위장하면 다운스트림이 그대로 쓴다 -- gemini 와
+            # claude 는 이미 이렇게 하는데 여기만 "텍스트가 있으면 ok" 로
+            # 남아 있었다(재현: exit 1 + 부분 텍스트 -> status "ok").
+            # 받은 데까지는 그대로 돌려준다.
             return LLMResponse(
-                status=f"error: codex exit code {code}",
+                text=text,
+                status=(
+                    f"error: codex exited abnormally (exit {code}) - "
+                    "returning what arrived so far"
+                ),
                 duration_s=duration,
                 raw_debug=truncate_debug(debug + "\n" + tail_lines(stderr)),
             )

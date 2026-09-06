@@ -41,6 +41,44 @@ WIDGET_ORDER = [
     "openai_base_url", "system_preset", "batch_mode", "extra_body", "server_model",
 ]
 
+# 릴리스별로 "그때 배포된 순서" 를 그대로 박아둔 원장.
+#
+# 왜 필요한가: WIDGET_ORDER 하나만으로는 규칙이 강제되지 않는다. 테스트가
+# INPUT_TYPES 에서 뽑은 순서와 WIDGET_ORDER 를 비교하는데, 중간에 위젯을 끼우면서
+# **양쪽을 똑같이** 고치면 둘은 여전히 일치한다 -- 테스트는 통과하고, 정작 저장된
+# 워크플로우만 값이 밀린다. 실제로 재현되는 구멍이었다(v1.1 이후 추가된 뒤쪽 5개는
+# 아무 테스트도 붙잡고 있지 않았다).
+#
+# 과거 접두사를 그대로 남겨두면 "맨 뒤에만 붙인다" 가 검사 가능한 명제가 된다.
+# 새 릴리스를 낼 때 그 시점의 전체 목록을 한 줄 추가하면 된다. 기존 항목은
+# 절대 고치지 않는다 -- 고치는 순간 그 릴리스로 저장된 워크플로우를 버리는 것이다.
+FROZEN_WIDGET_ORDERS = (
+    # v1.0.0
+    (
+        "backend", "prompt", "system_prompt", "model", "file_access", "workspace_dir",
+        "temperature", "max_tokens", "timeout_sec", "seed", "control_after_generate",
+        "video_max_frames", "stream_view",
+        "video_path", "mcp_config", "extra_args",
+    ),
+    # v1.0.0 이후, lmstudio/claude 전용 위젯이 붙은 시점 (20칸 워크플로우)
+    (
+        "backend", "prompt", "system_prompt", "model", "file_access", "workspace_dir",
+        "temperature", "max_tokens", "timeout_sec", "seed", "control_after_generate",
+        "video_max_frames", "stream_view",
+        "video_path", "mcp_config", "extra_args",
+        "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
+    ),
+    # v1.1.0 (릴리스 태그 시점, 24칸)
+    (
+        "backend", "prompt", "system_prompt", "model", "file_access", "workspace_dir",
+        "temperature", "max_tokens", "timeout_sec", "seed", "control_after_generate",
+        "video_max_frames", "stream_view",
+        "video_path", "mcp_config", "extra_args",
+        "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
+        "openai_base_url", "system_preset", "batch_mode", "extra_body",
+    ),
+)
+
 # server_model 드롭다운을 쓰는 백엔드 = openai_compat 과 그 별칭들.
 OPENAI_COMPAT_BACKENDS = ("openai_compat",) + tuple(OPENAI_COMPAT_ALIASES)
 
@@ -398,6 +436,33 @@ class LLMHubGenerate:
             emitter = stream.make_emitter(
                 node_id=unique_id, enabled=(stream_view != "off")
             )
+
+            # 붙인 미디어가 모델에 못 갔으면 생성을 시작하지 않는다.
+            #
+            # 예전에는 media_notes 에만 적고 그대로 진행했다. 그러면 모델은 그림을
+            # 못 본 채 프롬프트만으로 답하고 status 는 ok 로 나온다 -- 사용자는
+            # 그림을 보고 쓴 답이라고 믿는다. 캡션 작업이라면 환각 캡션이 전부
+            # 저장된다. 흔한 원인: workspace_dir 이 읽기 전용이거나 video_path 오타.
+            #
+            # "잘린 결과를 성공으로 위장하지 않는다" 는 이 프로젝트의 규칙을
+            # 미디어에도 똑같이 적용한다.
+            media_error = ""
+            if image is not None and not image_paths:
+                media_error = media_notes[0] if media_notes else (
+                    "image: no PNG was produced from the IMAGE input"
+                )
+            elif (video is not None or _as_text(video_path)) and not video_paths:
+                media_error = media_notes[0] if media_notes else (
+                    "video: the video input could not be resolved to a file"
+                )
+            if media_error:
+                status_out = f"error: {media_error}"
+                emitter.finish(status=status_out, text="")
+                return {
+                    "ui": {"text": [""], "llmhub_status": [status_out]},
+                    "result": ("", status_out, truncate_debug("\n".join(media_notes))),
+                }
+
             emitter.set_status(f"{backend} starting...")
 
             # 백엔드별 드롭다운에서 고른 모델이 있으면 그쪽이 우선한다.
