@@ -113,8 +113,10 @@ like something you have to fill in. On `openai_compat` it stays visible, since
 there is no preset to fall back on. **Leave `/v1` off the end**; the node appends
 `/v1/chat/completions` itself.
 
-Type the model name into the `model` field above (for example `qwen3:8b`). The
-dropdown is LM Studio only.
+Pick the model from **`server_model`**, which lists whatever is loaded on the
+server running on this machine — press **`⟳`** on the title bar if you started the
+server after ComfyUI. For a remote or paid endpoint nothing is listed (see §3), so
+type the name into `model` instead (for example `qwen3:8b`).
 
 #### Hosted providers work too
 
@@ -190,7 +192,7 @@ They are icon-only so they do not cover the node's name; **hover one to see what
 
 | Button | What it does |
 |---|---|
-| **`▾` / `▴`** | Expand / collapse the advanced options. Most inputs are hidden by default so the node stays small; `backend`, `prompt`, `system_prompt` and the model dropdown always stay visible. The state is saved with the workflow |
+| **`▾` / `▴`** | Expand / collapse the advanced options. Most inputs are hidden by default so the node stays small; `backend`, `prompt` and the model dropdown always stay visible (`system_prompt` is folded away — write it in the **`✎`** editor). The state is saved with the workflow |
 | **`✎`** | Open the system prompt editor (§3-1). Drawn pressed while a system prompt is set, since the box itself is folded away |
 | **`⟳`** | Refresh the model dropdown. Shown for `lmstudio` and for the OpenAI-compatible backends — see below |
 
@@ -465,12 +467,18 @@ never committed to git.)
     "ttl_sec": 300,
     "unload_after": true
   },
+  "openai_compat": {
+    "base_url": "http://127.0.0.1:11434",
+    "api_token": "",
+    "default_model": ""
+  },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
     "gemini_model": "gemini-3-flash",
     "gemini_approval_mode": "plan",
     "claude_system_prompt_mode": "append"
   },
+  "allow_unsafe_extra_args": false,
   "tool_loop_max_iters": 8,
   "max_file_read_bytes": 262144
 }
@@ -558,7 +566,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**419 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**439 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -712,7 +720,9 @@ Ollama·vLLM·llama.cpp 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제�
 `openai_compat` 에서는 기본값이 없으므로 그대로 보입니다.
 **끝에 `/v1` 을 붙이지 마세요.** 노드가 `/v1/chat/completions` 를 직접 이어 붙입니다.
 
-모델 이름은 위쪽 `model` 칸에 직접 적습니다 (예: `qwen3:8b`). 드롭다운은 LM Studio 전용입니다.
+모델은 **`server_model`** 드롭다운에서 고르면 됩니다 — 이 컴퓨터에 떠 있는 서버에서
+읽어옵니다. ComfyUI 를 먼저 켜셨다면 제목 줄의 **`⟳`** 를 한 번 누르세요.
+원격·유료 주소는 목록에 안 나오므로(§3 참고) `model` 칸에 이름을 직접 적습니다 (예: `qwen3:8b`).
 
 #### 유료 API 서비스도 됩니다
 
@@ -788,7 +798,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 
 | 버튼 | 하는 일 |
 |---|---|
-| **`▾` / `▴`** | 고급 옵션 펼치기 / 접기. 위 입력 대부분은 기본적으로 숨겨져 노드가 작게 유지되고, `backend` / `prompt` / `system_prompt` 와 모델 드롭다운은 접어도 항상 보입니다. 펼침 상태는 워크플로우에 함께 저장됩니다 |
+| **`▾` / `▴`** | 고급 옵션 펼치기 / 접기. 위 입력 대부분은 기본적으로 숨겨져 노드가 작게 유지되고, `backend` / `prompt` 와 모델 드롭다운은 접어도 항상 보입니다 (`system_prompt` 는 접혀 있습니다 — **`✎`** 편집창에서 씁니다). 펼침 상태는 워크플로우에 함께 저장됩니다 |
 | **`✎`** | 시스템 프롬프트 편집창 열기 (§3-1). 칸이 접혀 있으므로, 시스템 프롬프트가 들어 있으면 버튼이 눌린 색으로 표시됩니다 |
 | **`⟳`** | 모델 드롭다운 다시 받기. `lmstudio` 와 OpenAI 호환 백엔드에서 보입니다 — 아래 참조 |
 
@@ -1061,12 +1071,18 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
     "ttl_sec": 300,
     "unload_after": true
   },
+  "openai_compat": {
+    "base_url": "http://127.0.0.1:11434",
+    "api_token": "",
+    "default_model": ""
+  },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
     "gemini_model": "gemini-3-flash",
     "gemini_approval_mode": "plan",
     "claude_system_prompt_mode": "append"
   },
+  "allow_unsafe_extra_args": false,
   "tool_loop_max_iters": 8,
   "max_file_read_bytes": 262144
 }
@@ -1157,7 +1173,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**419종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**439종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 

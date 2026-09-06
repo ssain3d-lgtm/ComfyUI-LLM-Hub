@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-llm-hub"
-description = "Pick an LLM backend (LM Studio / Claude Code / Codex / Gemini) and generate text inside ComfyUI, with a live monitor on the node."
-version = "1.1.0"
+description = "Pick an LLM backend from a dropdown and generate text inside ComfyUI: LM Studio, Ollama / vLLM / llama.cpp, and the Claude Code / Codex / Gemini CLIs, with a live monitor on the node."
+version = "1.2.0"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = ["requests"]

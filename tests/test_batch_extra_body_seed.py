@@ -163,6 +163,35 @@ class TestBatchMode(unittest.TestCase):
         self.assertIn("3 images -> 3 calls", out["result"][2])
 
 
+class TestToolLoopLimit(unittest.TestCase):
+    """툴 루프가 한도에서 끊겼을 때 그렇게 말해야 한다.
+
+    예전에는 평문을 돌려줘서 길이만으로 분류됐다. 본문이 비면 "모델이 답을
+    안 함" 이라는 거짓 진단이 나가고(실제로는 조사 중에 잘린 것), 마지막
+    메시지에 서두라도 있으면 잘린 답이 ok 로 나갔다.
+    """
+
+    def test_hitting_the_limit_is_an_error_not_an_empty_response(self):
+        # 계속 툴만 부르는 모델을 흉내낸다.
+        script = [{"tool_calls": [{"name": "list_dir", "path": "."}]}] * 6
+        with MockLMStudio(script=script) as server:
+            backend = lmstudio_mod.LMStudioBackend(
+                config={"lmstudio": {"base_url": server.base_url},
+                        "tool_loop_max_iters": 3}
+            )
+            backend.max_iters = 3
+            response = backend.generate(LLMRequest(
+                "lmstudio", "", "", "이 폴더를 조사해줘",
+                file_access=True, workspace_dir=_PACK_ROOT,
+            ))
+        self.assertTrue(response.status.startswith("error:"), response.status)
+        self.assertIn("tool loop", response.status)
+        # 무엇을 고쳐야 하는지 말해준다.
+        self.assertIn("tool_loop_max_iters", response.status)
+        # "모델이 답을 안 함" 이라는 거짓 진단은 더 이상 안 나온다.
+        self.assertNotIn("produced no text", response.status)
+
+
 class TestMediaFailureIsNotOk(unittest.TestCase):
     """붙인 그림이 모델에 못 갔으면 생성을 시작하지 않는다.
 

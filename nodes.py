@@ -77,6 +77,15 @@ FROZEN_WIDGET_ORDERS = (
         "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
         "openai_base_url", "system_preset", "batch_mode", "extra_body",
     ),
+    # v1.2.0 (25칸)
+    (
+        "backend", "prompt", "system_prompt", "model", "file_access", "workspace_dir",
+        "temperature", "max_tokens", "timeout_sec", "seed", "control_after_generate",
+        "video_max_frames", "stream_view",
+        "video_path", "mcp_config", "extra_args",
+        "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
+        "openai_base_url", "system_preset", "batch_mode", "extra_body", "server_model",
+    ),
 )
 
 # server_model 드롭다운을 쓰는 백엔드 = openai_compat 과 그 별칭들.
@@ -217,7 +226,8 @@ class LLMHubGenerate:
                 "timeout_sec": ("INT", {"default": 300, "min": 10, "max": 3600,
                     "tooltip": "Time limit in seconds. The CLIs need a few seconds of cold "
                                "start, so leave room."}),
-                # seed 값 자체는 사용하지 않는다 (DESIGN §5-4).
+                # 캐시 무효화용이자, HTTP 백엔드에서는 실제 샘플링 시드다
+                # (0 이면 안 보낸다). DESIGN §5-4 의 수정 주석 참고.
                 "seed": (
                     "INT",
                     {
@@ -225,10 +235,12 @@ class LLMHubGenerate:
                         "min": 0,
                         "max": 0xFFFFFFFF,
                         "control_after_generate": True,
-                        "tooltip": "The value itself is never used. Changing it is how you "
-                                   "tell ComfyUI the input changed so it runs again instead "
-                                   "of reusing the cache. Change it to regenerate the same "
-                                   "prompt.",
+                        "tooltip": "Busts ComfyUI's cache so the same prompt runs again "
+                                   "instead of reusing the last result. On lmstudio/"
+                                   "openai_compat a non-zero value is also sent to the "
+                                   "server as the sampling seed, so the same seed can "
+                                   "reproduce the same text; 0 sends nothing. The three "
+                                   "CLIs have no seed flag and ignore it.",
                     },
                 ),
                 # --- 아래는 나중에 추가된 위젯이다. 기존 위젯 뒤에 붙여야

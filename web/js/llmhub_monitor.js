@@ -12,7 +12,7 @@ const EVENT_NAME = "llmhub.stream";
 // version.py 와 같은 값이어야 한다(테스트로 고정). 진단할 때 제일 먼저 묻는 게
 // "브라우저가 지금 몇 버전 JS 를 들고 있느냐" 인데, 캐시된 옛 파일이 남아 있으면
 // 파이썬만 새 버전이고 화면은 옛날인 상태가 된다. 그때 이 줄이 답을 준다.
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 // utils/presets.py 의 PRESET_NONE 과 같은 값이어야 한다.
 const PRESET_NONE = "(none)";
@@ -181,6 +181,8 @@ async function copyToClipboard(text) {
 
 // 모니터 창 높이. stream_view=off 로 숨길 때 되돌릴 값이라 모듈 범위에 둔다.
 const PANEL_HEIGHT = 240;
+// stream_view=off 일 때 남기는 높이. 본문만 접고 상태줄과 Stop 버튼은 남긴다.
+const PANEL_HEADER_HEIGHT = 30;
 
 // prompt 칸의 최소 높이. system_prompt 를 접어 넣은 자리를 여기로 돌린다 --
 // 실제로 매번 쓰는 칸은 이쪽이다. 최소값이라 사용자가 노드를 늘려 잡은 높이를
@@ -194,7 +196,11 @@ const PROMPT_MIN_HEIGHT = 180;
 function noticeFor(status, done) {
   if (!done) return "";
   const text = String(status || "").trim();
-  return /^(error|stopped)\b/i.test(text) ? text : "";
+  // rate_limited 는 error: 접두사가 없어서 이 판정을 통과하지 못했다. README 가
+  // 문서화한 4가지 status 중 하나이고, 구독 CLI 사용자에게는 가장 흔한 일상적
+  // 실패인데 본문이 빈 채로 그려졌다 -- 정확히 "아무 일도 안 일어난 것" 과
+  // 구별되지 않는 상태다.
+  return /^(error|stopped|rate_limited)\b/i.test(text) ? text : "";
 }
 
 function createPanel(node) {
@@ -389,15 +395,21 @@ function applyMonitorVisibility(node, mode) {
   // mode 를 넘기는 쪽은 위젯 callback 이다. 위젯이 값을 먼저 쓰고 callback 을
   // 부르는 게 관용이지만, 그 순서에 기대지 않으려고 값을 직접 받는다.
   const hidden = (mode ?? viewMode(node)) === "off";
-  if (widget.element) widget.element.style.display = hidden ? "none" : "";
-  widget.hidden = hidden;
-  if (hidden) {
-    widget.computeSize = () => [0, -4];
-    widget.computeLayoutSize = () => ({ minHeight: 0, minWidth: 0 });
-  } else {
-    widget.computeSize = (width) => [width, PANEL_HEIGHT];
-    widget.computeLayoutSize = () => ({ minHeight: PANEL_HEIGHT, minWidth: 200 });
-  }
+
+  // off 는 "실시간 출력을 끈다" 는 뜻이지 "노드가 아무 말도 안 한다" 가 아니다.
+  // 예전에는 위젯 전체를 display:none 으로 지워서 상태줄과 Stop 버튼까지
+  // 같이 사라졌다. 그러면 error/stopped/rate_limited 가 화면에서 증발하고,
+  // 우클릭 메뉴에도 Stop 이 없어서 300초짜리 CLI 실행을 ComfyUI 큐 전체
+  // 취소 말고는 멈출 방법이 없었다. 사람들은 노드를 작게 만들려고 off 를
+  // 고르는데, 대가가 "피드백 전무" 였던 셈이다.
+  // → 본문만 접는다. 자리를 차지하던 건 어차피 본문이다.
+  const body = widget.element?.querySelector(".llmhub-body");
+  if (body) body.style.display = hidden ? "none" : "";
+  if (widget.element) widget.element.style.display = "";
+  widget.hidden = false;
+  const height = hidden ? PANEL_HEADER_HEIGHT : PANEL_HEIGHT;
+  widget.computeSize = (width) => [width, height];
+  widget.computeLayoutSize = () => ({ minHeight: height, minWidth: 200 });
 }
 
 // backend 값에 따라 그 백엔드가 실제로 쓰는 위젯만 보인다.
@@ -707,8 +719,12 @@ function openPromptEditor(node) {
     overlay.remove();
   };
 
+  let loadedName = null;
+
   const apply = () => {
     promptWidget.value = editor.value;
+    // 라벨과 본문은 반드시 같이 움직인다.
+    if (loadedName && presetWidget) presetWidget.value = loadedName;
     // 위젯 값을 직접 바꾸면 callback 이 안 불린다. 저장/캐시 무효화가 필요한
     // 위젯은 아니지만, 화면은 다시 그려야 새 내용이 보인다.
     promptWidget.callback?.(promptWidget.value);
@@ -744,8 +760,11 @@ function openPromptEditor(node) {
     const name = list.value;
     if (!name) return say("Pick a preset to load.", true);
     editor.value = presets[name] ?? "";
-    if (presetWidget) presetWidget.value = name;
-    say(`Loaded '${name}'.`);
+    // presetWidget 은 여기서 안 바꾼다. Load 후 Cancel/Esc 로 닫으면 노드에는
+    // 새 프리셋 이름이 붙어 있는데 system_prompt 는 옛 내용 그대로가 되고,
+    // 그 거짓말이 워크플로우에 그대로 저장된다. Apply 할 때 함께 바꾼다.
+    loadedName = name;
+    say(`Loaded '${name}'. Press Apply to put it on the node.`);
   });
   // 목록에서 고르는 것만으로도 불러온다. 두 번 누르게 할 이유가 없다.
   list.addEventListener("change", () => {
@@ -756,6 +775,12 @@ function openPromptEditor(node) {
     const suggested = list.value || "";
     const name = window.prompt("Save this system prompt as:", suggested);
     if (name === null) return; // 취소
+    // Delete 에만 확인이 걸려 있었다. 반사적으로 하는 쪽(덮어쓰기)이 오히려
+    // 무방비였던 셈이다.
+    if (Object.prototype.hasOwnProperty.call(presets, name)
+        && !window.confirm(`Preset '${name}' already exists. Overwrite it?`)) {
+      return;
+    }
     say("Saving…");
     try {
       const response = await api.fetchApi("/llmhub/presets", {
@@ -827,6 +852,17 @@ function setupPresetLoader(node) {
       .then((data) => {
         const text = (data.presets || {})[value];
         if (typeof text !== "string") return;
+        // 쓰던 내용을 확인 없이 날리지 않는다. 이 드롭다운은 항상 보이는 자리에
+        // 있고, system_prompt 칸은 접혀 있어서 -- 사라지는 텍스트가 화면에
+        // 보이지도 않는다. 되돌리기도 없다.
+        const current = typeof promptWidget.value === "string" ? promptWidget.value : "";
+        if (current.trim() && current !== text) {
+          const ok = window.confirm(
+            `Replace the current system prompt with preset '${value}'?\n\n` +
+            "The text you have now will be lost."
+          );
+          if (!ok) return;
+        }
         promptWidget.value = text;
         promptWidget.callback?.(text);
         node.setDirtyCanvas?.(true, true);
@@ -1171,6 +1207,13 @@ app.registerExtension({
       const mode = viewMode(node);
       if (mode === "off") return;
 
+      // execution_start 는 캐시로 응답될 실행에도 온다. 그래서 지우는 시점을
+      // 여기로 미뤘다 -- 이번 실행이 실제로 무언가를 보내온 순간이다.
+      if (control.pendingClear) {
+        control.pendingClear = false;
+        control.clear();
+      }
+
       const body = data.text || "";
       const thinking = data.thinking || "";
 
@@ -1200,14 +1243,19 @@ app.registerExtension({
       }
     });
 
-    // 새 실행이 시작되면 지난 결과를 지운다.
-    // (이걸 안 하면 이번 실행이 아무것도 못 냈을 때 이전 결과가 현재 결과처럼 보인다.)
+    // 새 실행이 시작되면 "이번 결과" 와 "지난 결과" 가 섞이지 않게 표시를 바꾼다.
+    //
+    // 예전에는 여기서 본문을 지웠다. 그런데 입력을 안 바꾸고 Queue 를 누르면
+    // ComfyUI 가 캐시로 응답해서 스트림 이벤트가 아예 안 온다 -- 본문은 이미
+    // 비워졌고 새로 채울 것도 없어서, 화면상으로는 "고장났다" 와 똑같아진다.
+    // 그래서 지우지 않고 상태만 Queued 로 바꾼다. 실제로 이번 실행의 첫 델타가
+    // 도착하면 그때 본문을 갈아끼운다(아래 llmhub.stream 의 첫 이벤트).
     api.addEventListener("execution_start", () => {
       for (const node of app.graph?._nodes || []) {
         const control = node[PANEL_KEY];
         if (control) {
-          control.clear();
-          control.setStatus("Idle", null, true);
+          control.pendingClear = true;
+          control.setStatus("Queued…", null, false);
         }
       }
     });
@@ -1215,6 +1263,30 @@ app.registerExtension({
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name !== NODE_NAME) return;
+
+    // 실행이 끝나면 ComfyUI 가 노드의 ui 페이로드를 이리로 넘겨준다.
+    //
+    // nodes.py 는 예전부터 {"ui": {"text": [...], "llmhub_status": [...]}} 를
+    // 내보내면서 주석에 "모니터는 휘발성이고 이쪽이 보존을 맡는다" 고 적어뒀는데,
+    // 정작 프론트엔드에서 그걸 읽는 곳이 없었다. 그래서 (1) 캐시로 응답된 실행과
+    // (2) 워크플로우를 다시 연 직후가 둘 다 빈 패널이었다.
+    const onExecutedPrev = nodeType.prototype.onExecuted;
+    nodeType.prototype.onExecuted = function (message) {
+      const result = onExecutedPrev?.apply(this, arguments);
+      const control = this[PANEL_KEY];
+      if (control && message) {
+        // 값은 배열로 온다(ComfyUI 의 ui 규약).
+        const text = [].concat(message.text || [])[0] || "";
+        const status = [].concat(message.llmhub_status || [])[0] || "";
+        control.pendingClear = false;
+        const notice = text ? "" : noticeFor(status, true);
+        control.lastIsNotice = !!notice;
+        control.lastText = text || notice;
+        control.render(control.lastText, viewMode(this));
+        if (status) control.setStatus(status, null, true);
+      }
+      return result;
+    };
 
     const onCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {

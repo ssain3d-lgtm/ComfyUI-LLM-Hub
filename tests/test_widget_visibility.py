@@ -8,6 +8,7 @@ JS 는 자동 테스트가 없어서, 위젯 이름 오타 하나면 그 위젯�
 from __future__ import annotations
 
 import importlib
+import io
 import os
 import re
 import sys
@@ -607,6 +608,101 @@ class TestFailureIsVisible(unittest.TestCase):
         """지난 실행의 붉은 문구가 남으면 이번 결과가 실패처럼 보인다."""
         self.assertIn("this.lastIsNotice = false", self.javascript)  # clear()
         self.assertIn("control.lastIsNotice = false", self.javascript)  # 본문 도착 시
+
+
+class TestSilentFailureFixes(unittest.TestCase):
+    """3인 검토 2단계: "실패가 아무 일도 안 일어난 것처럼 보인다" 부류."""
+
+    def setUp(self):
+        self.javascript = _javascript()
+
+    def _body(self, declaration):
+        after = self.javascript.split(declaration, 1)[1]
+        return after.split("\n}", 1)[0]
+
+    def test_rate_limited_is_promoted_to_the_body(self):
+        """구독 CLI 사용자에게 가장 흔한 실패인데 본문이 빈 채로 그려졌다."""
+        found = re.search(r"return /\^\(([^)]+)\)\\b/i\.test\(text\)", self.javascript)
+        self.assertIsNotNone(found, "noticeFor 판정식을 못 읽었다")
+        pattern = re.compile(r"^(" + found.group(1) + r")\b", re.I)
+        self.assertRegex("rate_limited", pattern)
+        # 성공은 여전히 올리면 안 된다.
+        self.assertNotRegex("ok", pattern)
+
+    def test_rate_limited_is_a_real_status_python_produces(self):
+        """JS 만 고치고 파이썬 쪽 문구가 바뀌면 다시 어긋난다."""
+        source = ""
+        for name in ("claude_code", "codex", "lmstudio"):
+            with io.open(os.path.join(_PACK_ROOT, "backends", f"{name}.py"),
+                         encoding="utf-8") as fh:
+                source += fh.read()
+        self.assertIn('status="rate_limited"', source)
+
+    def test_off_keeps_the_status_line_and_stop_button(self):
+        """off 는 "실시간 출력을 끈다" 지 "노드가 아무 말도 안 한다" 가 아니다.
+
+        예전에는 위젯 전체를 display:none 으로 지워서 상태줄과 Stop 이 같이
+        사라졌다. 우클릭 메뉴에도 Stop 이 없어 멈출 방법이 없어졌다.
+        """
+        body = self._body("function applyMonitorVisibility")
+        self.assertIn(".llmhub-body", body, "본문만 접어야 한다")
+        self.assertIn("PANEL_HEADER_HEIGHT", body, "헤더 높이는 남겨야 한다")
+        # 위젯 자체를 숨기면 헤더까지 사라진다.
+        self.assertNotIn('widget.element.style.display = hidden', body)
+        self.assertIn("widget.hidden = false", body)
+
+    def test_execution_start_does_not_wipe_the_last_result(self):
+        """캐시로 응답되면 스트림 이벤트가 안 온다. 미리 지우면 빈 화면만 남는다."""
+        body = self.javascript.split('addEventListener("execution_start"', 1)[1]
+        body = body.split("});", 1)[0]
+        self.assertNotIn("control.clear()", body)
+        self.assertIn("pendingClear = true", body)
+
+    def test_the_clear_happens_on_the_first_real_event(self):
+        """지우기를 미루기만 하고 실제로 안 지우면 지난 결과가 새 결과로 보인다."""
+        body = self.javascript.split(f'addEventListener(EVENT_NAME', 1)[1]
+        self.assertIn("control.pendingClear", body)
+        self.assertIn("control.clear()", body)
+
+    def test_onexecuted_restores_the_saved_result(self):
+        """nodes.py 의 ui 페이로드를 읽는 곳이 아예 없었다."""
+        self.assertIn("nodeType.prototype.onExecuted", self.javascript)
+        body = self.javascript.split("nodeType.prototype.onExecuted = function", 1)[1]
+        body = body.split("\n    };", 1)[0]
+        self.assertIn("message.text", body)
+        self.assertIn("message.llmhub_status", body)
+
+    def test_the_ui_keys_match_what_python_sends(self):
+        """키 이름이 어긋나면 조용히 아무것도 복원되지 않는다."""
+        with io.open(os.path.join(_PACK_ROOT, "nodes.py"), encoding="utf-8") as fh:
+            source = fh.read()
+        self.assertIn('"ui": {"text": [', source)
+        self.assertIn('"llmhub_status": [', source)
+
+    def test_the_preset_dropdown_asks_before_destroying_text(self):
+        """항상 보이는 드롭다운이 접혀 있는 칸을 확인 없이 덮어썼다."""
+        body = self._body("function setupPresetLoader")
+        self.assertIn("window.confirm", body)
+        # 빈 칸이면 물어볼 것도 없다.
+        self.assertIn("current.trim()", body)
+
+    def test_load_does_not_relabel_until_apply(self):
+        """Load 후 Cancel 하면 라벨과 본문이 어긋난 채 저장된다."""
+        load_block = self.javascript.split('.llmhub-load").addEventListener', 1)[1]
+        load_block = load_block.split("});", 1)[0]
+        self.assertNotIn("presetWidget.value = name", load_block)
+        # "const apply = () =>" 로 자르면 안 된다 -- 파일에 두 번 나오고 첫
+        # 매치가 위젯 표시 로직이다. (이 테스트를 쓰다가 실제로 걸렸다.)
+        apply_block = self.javascript.split("promptWidget.value = editor.value;", 1)[1]
+        apply_block = apply_block.split("\n  };", 1)[0]
+        self.assertIn("presetWidget.value = loadedName", apply_block)
+
+    def test_overwriting_a_preset_is_confirmed_like_deleting_one(self):
+        """반사적으로 하는 쪽(덮어쓰기)이 오히려 무방비였다."""
+        save_block = self.javascript.split('.llmhub-save").addEventListener', 1)[1]
+        save_block = save_block.split("\n  });", 1)[0]
+        self.assertIn("already exists", save_block)
+        self.assertIn("window.confirm", save_block)
 
 
 class TestConnectButton(unittest.TestCase):

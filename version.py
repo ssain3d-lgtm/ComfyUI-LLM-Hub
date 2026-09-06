@@ -6,4 +6,4 @@ pyproject.toml / web/js/llmhub_monitor.js 와 값이 어긋나면 테스트가 �
 되어서, 진단할 때 제일 믿어야 할 숫자를 못 믿게 된다.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

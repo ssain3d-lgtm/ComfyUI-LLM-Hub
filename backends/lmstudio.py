@@ -480,8 +480,23 @@ class LMStudioBackend(BaseBackend):
                     }
                 )
 
-        notes.append("tool loop limit")
-        return last_text or "", notes
+        # 여기까지 왔다는 건 모델이 max_iters 번을 다 쓰고도 툴 호출을 계속
+        # 하고 있었다는 뜻이다. 예전에는 평문을 그대로 돌려줘서 _generate 가
+        # 길이만 보고 분류했다 -- 본문이 비면 "모델이 답을 안 함" 이라는 거짓
+        # 진단이 나가고(실제로는 잔뜩 말했고 조사 중에 잘린 것이다), 마지막
+        # 메시지에 서두라도 있었으면 잘린 답이 ok 로 나갔다.
+        return (
+            LLMResponse(
+                text=(last_text or "").strip(),
+                status=(
+                    f"error: the tool loop hit its limit ({self.max_iters} rounds) "
+                    "before the model finished - raise tool_loop_max_iters in "
+                    "config.json, or narrow workspace_dir so it needs fewer files"
+                ),
+                raw_debug=f"lmstudio: tool loop limit ({self.max_iters}) reached",
+            ),
+            notes,
+        )
 
     @staticmethod
     def _reasoning_budget_error(choice: dict, usage: dict, req: LLMRequest):
