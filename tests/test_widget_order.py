@@ -60,6 +60,52 @@ class TestWidgetOrder(unittest.TestCase):
         order = nodes_mod.WIDGET_ORDER
         self.assertEqual(len(order), len(set(order)))
 
+    def test_every_frozen_release_order_is_still_a_prefix(self):
+        """이 테스트가 "맨 뒤에만 붙인다" 를 실제로 강제하는 유일한 장치다.
+
+        WIDGET_ORDER 와 INPUT_TYPES 를 비교하는 테스트만으로는 부족하다 --
+        중간에 위젯을 끼우면서 양쪽을 똑같이 고치면 둘은 여전히 일치하고,
+        저장된 워크플로우만 조용히 밀린다. 실제로 재현되던 구멍이었다.
+
+        과거 릴리스의 접두사를 그대로 붙잡고 있으면, 맨 뒤가 아닌 어느 자리에
+        끼워 넣어도 여기서 걸린다.
+        """
+        self.assertTrue(nodes_mod.FROZEN_WIDGET_ORDERS, "원장이 비어 있다")
+        for frozen in nodes_mod.FROZEN_WIDGET_ORDERS:
+            self.assertEqual(
+                tuple(nodes_mod.WIDGET_ORDER[:len(frozen)]), tuple(frozen),
+                f"{len(frozen)}칸 릴리스로 저장한 워크플로우가 밀린다",
+            )
+
+    def test_the_ledger_only_ever_grows(self):
+        """원장 항목끼리도 접두사 관계여야 한다.
+
+        과거 항목을 손대면 그 릴리스로 저장한 워크플로우를 버리는 것이다.
+        서로 접두사가 아니면 원장 자체가 이미 손상된 것이다.
+        """
+        orders = nodes_mod.FROZEN_WIDGET_ORDERS
+        for earlier, later in zip(orders, orders[1:]):
+            self.assertEqual(
+                tuple(later[:len(earlier)]), tuple(earlier),
+                "원장의 과거 항목이 수정됐다",
+            )
+            self.assertLess(len(earlier), len(later), "원장은 자라기만 해야 한다")
+
+    def test_the_newest_frozen_order_covers_everything_but_new_work(self):
+        """원장의 마지막 항목이 현재 목록에서 너무 뒤처지면 방어막이 다시 헐거워진다.
+
+        지금 뒤에 붙은 것들은 아직 배포 전이라 원장에 없는 게 정상이다. 다만
+        그 개수가 계속 늘면 "아무도 안 잡는 구간" 이 다시 커진다 -- 릴리스할 때
+        원장에 한 줄 추가하라는 뜻이다.
+        """
+        newest = nodes_mod.FROZEN_WIDGET_ORDERS[-1]
+        unguarded = nodes_mod.WIDGET_ORDER[len(newest):]
+        self.assertLessEqual(
+            len(unguarded), 4,
+            f"원장에 없는 위젯이 {len(unguarded)}개다({unguarded}). "
+            "릴리스 시점의 전체 목록을 FROZEN_WIDGET_ORDERS 에 추가하라.",
+        )
+
     def test_core_widgets_never_move(self):
         """v1.0.0 워크플로우가 지금도 열려야 한다. 앞쪽은 그때 그대로여야 한다."""
         original = [

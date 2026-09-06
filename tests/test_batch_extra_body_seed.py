@@ -36,6 +36,7 @@ LLMRequest = base.LLMRequest
 
 sys.path.insert(0, os.path.join(_PACK_ROOT, "tests"))
 from mock_lmstudio import MockLMStudio  # noqa: E402
+from test_cli_backends import CLAUDE_OK, FakeCli, _patch  # noqa: E402
 
 
 class RecordingBackend:
@@ -162,6 +163,70 @@ class TestBatchMode(unittest.TestCase):
         self.assertIn("3 images -> 3 calls", out["result"][2])
 
 
+class TestMediaFailureIsNotOk(unittest.TestCase):
+    """붙인 그림이 모델에 못 갔으면 생성을 시작하지 않는다.
+
+    예전에는 debug 에만 적고 그대로 진행했다. 모델은 그림을 못 본 채
+    프롬프트만으로 답하고 status 는 ok 로 나온다 -- 사용자는 그림을 보고 쓴
+    답이라고 믿는다. 캡션 작업이면 환각 캡션이 전부 저장된다.
+    """
+
+    def test_a_failed_image_save_stops_the_run(self):
+        spy = RecordingBackend()
+        with mock.patch.object(nodes_mod, "get_backend", return_value=spy), \
+                mock.patch.object(nodes_mod.image_io, "save_images",
+                                  side_effect=PermissionError("read-only workspace")):
+            out = nodes_mod.LLMHubGenerate().generate(
+                backend="lmstudio", prompt="describe", system_prompt="", model="",
+                file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
+                timeout_sec=10, seed=0, stream_view="off", image=object(),
+            )
+        self.assertEqual(len(spy.calls), 0, "그림 없이 모델에게 물었다")
+        self.assertTrue(out["result"][1].startswith("error:"), out["result"][1])
+        self.assertIn("PermissionError", out["result"][1] + out["result"][2])
+
+    def test_an_empty_image_batch_stops_the_run(self):
+        """예외는 안 났는데 PNG 가 한 장도 안 나온 경우도 같다."""
+        spy = RecordingBackend()
+        with mock.patch.object(nodes_mod, "get_backend", return_value=spy), \
+                mock.patch.object(nodes_mod.image_io, "save_images", return_value=[]):
+            out = nodes_mod.LLMHubGenerate().generate(
+                backend="lmstudio", prompt="describe", system_prompt="", model="",
+                file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
+                timeout_sec=10, seed=0, stream_view="off", image=object(),
+            )
+        self.assertEqual(len(spy.calls), 0)
+        self.assertTrue(out["result"][1].startswith("error:"), out["result"][1])
+
+    def test_an_unresolvable_video_stops_the_run(self):
+        spy = RecordingBackend()
+        with mock.patch.object(nodes_mod, "get_backend", return_value=spy), \
+                mock.patch.object(nodes_mod.image_io, "get_tmp_dir", return_value="/fake"), \
+                mock.patch.object(nodes_mod.video_io, "resolve_video",
+                                  return_value=("", "video: file not found -> D:/typo.mp4")):
+            out = nodes_mod.LLMHubGenerate().generate(
+                backend="lmstudio", prompt="describe", system_prompt="", model="",
+                file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
+                timeout_sec=10, seed=0, stream_view="off", video_path="D:/typo.mp4",
+            )
+        self.assertEqual(len(spy.calls), 0)
+        self.assertTrue(out["result"][1].startswith("error:"), out["result"][1])
+        self.assertIn("typo.mp4", out["result"][1])
+
+    def test_no_media_attached_is_untouched(self):
+        """미디어를 안 붙인 평범한 실행이 이 검사에 걸리면 안 된다."""
+        spy = RecordingBackend()
+        out = run_node(spy)
+        self.assertEqual(len(spy.calls), 1)
+        self.assertEqual(out["result"][1], "ok")
+
+    def test_a_working_image_still_runs(self):
+        spy = RecordingBackend()
+        out = run_node(spy, images=2)
+        self.assertEqual(len(spy.calls), 1)
+        self.assertEqual(out["result"][1], "ok")
+
+
 class TestExtraBodyParsing(unittest.TestCase):
 
     def test_empty_is_not_an_error(self):
@@ -272,15 +337,42 @@ class TestExtraBodyThroughTheNode(unittest.TestCase):
         req = LLMRequest("claude", "", "", "hi")
         self.assertEqual(base.extra_body_ignored_note("claude", req), "")
 
-    def test_every_cli_backend_is_wired(self):
-        """헬퍼만 있고 부르는 곳이 없으면 아무 소용이 없다."""
-        for name in ("claude_code", "codex", "gemini"):
-            path = os.path.join(_PACK_ROOT, "backends", f"{name}.py")
-            with io.open(path, encoding="utf-8") as fh:
-                source = fh.read()
-            self.assertIn(
-                "extra_body_ignored_note(", source, f"{name}.py 가 안내를 안 만든다"
-            )
+    def test_every_cli_backend_actually_says_it(self):
+        """소스에 호출이 있는지가 아니라, 실제로 debug 에 나오는지를 본다.
+
+        예전에는 "extra_body_ignored_note(" 문자열을 grep 했다. 그러면 호출은
+        남기고 notes.append 만 지워도 통과한다 -- extra_body 가 CLI 백엔드에서
+        도로 조용히 사라지는 그 상태인데도(변이 실험으로 확인).
+        """
+        import importlib as _il
+
+        cases = {
+            "claude": (f"{_PACK_NAME}.backends.claude_code", "ClaudeCodeBackend",
+                       CLAUDE_OK, None),
+            "codex": (f"{_PACK_NAME}.backends.codex", "CodexBackend", "", "답"),
+            "gemini": (f"{_PACK_NAME}.backends.gemini", "GeminiBackend", "답", None),
+        }
+        for backend, (module_name, class_name, stdout, last_message) in cases.items():
+            with self.subTest(backend=backend):
+                module = _il.import_module(module_name)
+                fake = FakeCli(code=0, stdout=stdout, write_last_message=last_message)
+                with _patch(module, fake):
+                    response = getattr(module, class_name)().generate(
+                        LLMRequest(backend, "", "", "hi",
+                                   extra_body={"top_p": 0.9}),
+                    )
+                self.assertIn("extra_body", response.raw_debug, response.raw_debug[:300])
+                self.assertIn("ignored", response.raw_debug, response.raw_debug[:300])
+
+    def test_nothing_is_said_when_extra_body_is_empty(self):
+        """안 적었는데 안내가 뜨면 그것도 잡음이다."""
+        import importlib as _il
+
+        module = _il.import_module(f"{_PACK_NAME}.backends.gemini")
+        fake = FakeCli(code=0, stdout="답")
+        with _patch(module, fake):
+            response = module.GeminiBackend().generate(LLMRequest("gemini", "", "", "hi"))
+        self.assertNotIn("extra_body", response.raw_debug)
 
 
 class TestSeed(unittest.TestCase):

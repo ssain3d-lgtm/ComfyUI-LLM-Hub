@@ -474,11 +474,18 @@ class TestMonitorPanel(unittest.TestCase):
         self.assertIn("computeSize", body)
 
     def test_off_also_shrinks_the_node(self):
-        """패널만 숨고 노드 높이가 그대로면 빈칸이 남는다."""
-        body = self.javascript.split('w.name === "stream_view"', 1)[1]
-        body = body.split("\n      }", 1)[0]
-        self.assertIn("applyMonitorVisibility", body)
-        self.assertIn("resizeToWidgets", body)
+        """패널만 숨고 노드 높이가 그대로면 빈칸이 남는다.
+
+        예전에는 'w.name === "stream_view"' 로 잘랐는데, 그 문자열이 파일에
+        두 번 나온다. 첫 매치가 viewMode() 라서 실제로는 엉뚱한 구간을 보고
+        있었고, 진짜 콜백에서 두 줄을 지워도 통과했다(변이 실험으로 확인).
+        콜백 본문만 정확히 집어낸다.
+        """
+        body = self.javascript.split(
+            "widget.callback = function (value) {", 1
+        )[1].split("\n        };", 1)[0]
+        self.assertIn("applyMonitorVisibility(node, value)", body)
+        self.assertIn("resizeToWidgets(node)", body)
 
     def test_visibility_survives_a_workflow_reload(self):
         """저장된 워크플로우를 열 때도 적용돼야 off 로 저장한 노드가 작게 열린다."""

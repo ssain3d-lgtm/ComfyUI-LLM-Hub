@@ -558,7 +558,7 @@ Offline verification, no logins or servers required:
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**389 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**419 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -1157,7 +1157,7 @@ fable 이면 $19.6 입니다.
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**389종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**419종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 
