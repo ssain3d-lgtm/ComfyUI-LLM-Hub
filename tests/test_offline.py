@@ -242,7 +242,20 @@ class TestLMStudioBackend(unittest.TestCase):
         cfg = {"lmstudio": {"base_url": "http://127.0.0.1:1"}}
         backend = lmstudio_mod.LMStudioBackend(config=cfg)
         resp = backend.generate(LLMRequest("lmstudio", "", "", "안녕", timeout_s=5))
-        self.assertIn("no response from the LM Studio server", resp.status)
+        self.assertIn("no response from the lmstudio server", resp.status)
+        # 예전에는 "on port 1234" 가 문구에 박혀 있어서, base_url 을 바꾼 사람에게
+        # 쓰지도 않는 포트를 확인하라고 했다. 실제 주소를 말해야 한다.
+        self.assertIn("http://127.0.0.1:1", resp.status)
+        self.assertNotIn("port 1234", resp.status)
+
+    def test_the_connection_error_names_the_backend_you_picked(self):
+        """별칭으로 돌고 있는데 "LM Studio 서버" 라고 하면 어디를 볼지 모른다."""
+        backends = importlib.import_module(f"{_PACK_NAME}.backends")
+        backend = backends.get_backend("llamacpp")
+        backend.apply_base_url("http://127.0.0.1:1")
+        resp = backend.generate(LLMRequest("llamacpp", "", "", "안녕", timeout_s=5))
+        self.assertIn("llamacpp", resp.status)
+        self.assertIn("http://127.0.0.1:1", resp.status)
 
     def test_workspace_error_short_circuits(self):
         backend = lmstudio_mod.LMStudioBackend(config={})

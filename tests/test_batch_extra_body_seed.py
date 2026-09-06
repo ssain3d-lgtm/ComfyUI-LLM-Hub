@@ -163,6 +163,53 @@ class TestBatchMode(unittest.TestCase):
         self.assertIn("3 images -> 3 calls", out["result"][2])
 
 
+class TestBatchDoesNotThrashVram(unittest.TestCase):
+    """one_per_image 가 장마다 모델을 내렸다 올리면 안 된다.
+
+    LM Studio 백엔드는 호출마다 언로드한다. 장별 루프는 장마다 호출한다.
+    그대로 두면 40장 캡션이 모델을 40번 다시 로드한다 -- 이 모드를 만든 이유가
+    그 작업인데 가장 느린 방식이 된다.
+    """
+
+    def _unload_flags(self, images, **kwargs):
+        seen = []
+
+        class Spy:
+            def generate(self, req):
+                seen.append(req.unload_after)
+                return base.LLMResponse(text="x", status="ok")
+
+        run_node(Spy(), images=images, **kwargs)
+        return seen
+
+    def test_only_the_last_image_unloads(self):
+        flags = self._unload_flags(3, batch_mode=nodes_mod.BATCH_PER_IMAGE,
+                                   lmstudio_unload_after=True)
+        self.assertEqual(flags, [False, False, True])
+
+    def test_a_single_call_still_unloads(self):
+        """배치가 아닌 평범한 실행의 동작은 그대로여야 한다."""
+        self.assertEqual(self._unload_flags(0, lmstudio_unload_after=True), [True])
+
+    def test_turning_it_off_stays_off(self):
+        flags = self._unload_flags(3, batch_mode=nodes_mod.BATCH_PER_IMAGE,
+                                   lmstudio_unload_after=False)
+        self.assertEqual(flags, [False, False, False])
+
+    def test_other_backends_are_left_to_their_own_config(self):
+        """lmstudio_* 위젯은 LM Studio 전용이다. 다른 백엔드에 넘기면,
+        위젯 기본값 True 때문에 "언로드 없음" 안내가 매 실행마다 붙는다."""
+        seen = []
+
+        class Spy:
+            def generate(self, req):
+                seen.append(req.unload_after)
+                return base.LLMResponse(text="x", status="ok")
+
+        run_node(Spy(), backend="llamacpp", lmstudio_unload_after=True)
+        self.assertEqual(seen, [None], "백엔드가 자기 설정을 따라야 한다")
+
+
 class TestToolLoopLimit(unittest.TestCase):
     """툴 루프가 한도에서 끊겼을 때 그렇게 말해야 한다.
 

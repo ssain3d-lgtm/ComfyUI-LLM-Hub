@@ -14,7 +14,7 @@ import os
 import time
 from dataclasses import replace
 
-from ..utils import cancel, fs_tools
+from ..utils import cancel, fs_tools, image_io
 from ..utils.config import load_config, resolve_api_token
 from .base import (
     BaseBackend,
@@ -31,7 +31,28 @@ from .base import (
     workspace_hint,
 )
 
-CONNECT_ERROR_MSG = "error: no response from the LM Studio server (check it is running and on port 1234)"
+# 포트를 문구에 박아두면 base_url 을 바꾼 사람에게 엉뚱한 포트를 확인하라고 한다.
+# 실제 주소는 _connect_error() 가 넣는다.
+CONNECT_ERROR_TEMPLATE = (
+    "error: no response from the {name} server at {base_url} "
+    "(check it is running and that the address matches)"
+)
+# 원격 주소를 조회할 때의 상한. 이벤트 루프를 오래 잡고 있으면 안 된다.
+REMOTE_PROBE_TIMEOUT_S = 0.4
+
+# 조회해도 안전한(= 즉시 거절당하는) 호스트.
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0")
+
+
+def is_loopback(base_url: str) -> bool:
+    """이 주소가 내 컴퓨터를 가리키는가."""
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(base_url).hostname or "").lower()
+    except Exception:
+        return False
+    return host in _LOOPBACK_HOSTS or host.startswith("127.")
 
 
 class LMStudioBackend(BaseBackend):
@@ -107,6 +128,18 @@ class LMStudioBackend(BaseBackend):
             messages.append({"role": "user", "content": req.user_prompt})
 
         return messages
+
+    def _connect_error(self) -> str:
+        """어느 서버에 못 붙었는지 이름과 주소로 말해준다."""
+        return CONNECT_ERROR_TEMPLATE.format(name=self.name, base_url=self.base_url)
+
+    def _note(self, message: str) -> str:
+        """debug 한 줄 앞에 이 백엔드의 실제 이름을 붙인다.
+
+        별칭(ollama/vllm/llamacpp)로 돌고 있는데 "lmstudio: ..." 라고 하면
+        어느 서버 얘긴지 알 수 없다.
+        """
+        return f"{self.name}: {message}"
 
     def _build_payload(self, req: LLMRequest, messages: list, model: str) -> dict:
         payload = {
@@ -188,7 +221,8 @@ class LMStudioBackend(BaseBackend):
             return LLMResponse(status=ws_error, duration_s=time.time() - started)
 
         if req.mcp_config:
-            debug_notes.append("lmstudio: mcp_config is planned for v1.5; using the built-in tool loop")
+            debug_notes.append(self._note(
+                "mcp_config is planned for v1.5; using the built-in tool loop"))
         if req.extra_args:
             debug_notes.append(
                 f"{self.name}: extra_args is ignored by this HTTP backend "
@@ -214,7 +248,12 @@ class LMStudioBackend(BaseBackend):
         # OpenAI 호환 chat/completions 에는 비디오 콘텐츠 타입이 없다.
         # → 프레임을 뽑아 이미지로 넣는다 (VLM 모델 필요).
         if req.video_paths:
-            frames, video_notes = frames_for_unsupported_video(req, "lmstudio")
+            # out_dir 을 안 주면 base.py 가 "영상이 있는 폴더" 에 쓴다. 사용자의
+            # 영상 라이브러리에 _llmhub_frames_0/ 이 생기고, 그 폴더가 읽기
+            # 전용이면 아예 실패한다. claude/codex 는 cwd 를 넘기고 있었다.
+            frames, video_notes = frames_for_unsupported_video(
+                req, self.name, image_io.get_tmp_dir(req.workspace_dir, req.file_access)
+            )
             debug_notes.extend(video_notes)
             if frames:
                 req = replace(req, image_paths=list(req.image_paths or []) + frames)
@@ -349,7 +388,7 @@ class LMStudioBackend(BaseBackend):
                     LLMResponse(
                         text=(last_text or "").strip(),
                         status="stopped - cancelled by user, returning what arrived so far",
-                        raw_debug="lmstudio: cancelled by user (between tool-loop rounds)",
+                        raw_debug=self._note("cancelled by user (between tool-loop rounds)"),
                     ),
                     notes,
                 )
@@ -367,7 +406,7 @@ class LMStudioBackend(BaseBackend):
                             LLMResponse(
                                 text=streamed.strip(),
                                 status="stopped - cancelled by user, returning what arrived so far",
-                                raw_debug="lmstudio: cancelled by user",
+                                raw_debug=self._note("cancelled by user"),
                             ),
                             notes,
                         )
@@ -377,7 +416,7 @@ class LMStudioBackend(BaseBackend):
                             LLMResponse(
                                 text=streamed.strip(),
                                 status=f"error: timeout({req.timeout_s}s) - returning what arrived so far",
-                                raw_debug="lmstudio: timed out mid-stream",
+                                raw_debug=self._note("timed out mid-stream"),
                             ),
                             notes,
                         )
@@ -397,17 +436,17 @@ class LMStudioBackend(BaseBackend):
                     if fallback:
                         retried_with_model = True
                         model = fallback
-                        notes.append(f"lmstudio: no model given -> using '{fallback}' from /v1/models")
+                        notes.append(self._note(f"no model given -> using '{fallback}' from /v1/models"))
                         continue
                 # seed 는 OpenAI 규격 필드지만 모든 서버가 받는다는 보장은 없다
                 # (실기기로 확인하지 못했다, §0-1). 400 이면 시드만 빼고 한 번 더
                 # 해본다 -- 시드 하나 때문에 생성 전체가 실패하면 안 된다.
                 if not drop_seed and resp.status_code == 400 and "seed" in payload:
                     drop_seed = True
-                    notes.append(
-                        "lmstudio: the server rejected 'seed' (HTTP 400) -> retried without it "
+                    notes.append(self._note(
+                        "the server rejected 'seed' (HTTP 400) -> retried without it "
                         "(this server cannot reproduce results by seed)"
-                    )
+                    ))
                     continue
                 if detect_rate_limit(body):
                     status = "rate_limited"
@@ -493,7 +532,7 @@ class LMStudioBackend(BaseBackend):
                     "before the model finished - raise tool_loop_max_iters in "
                     "config.json, or narrow workspace_dir so it needs fewer files"
                 ),
-                raw_debug=f"lmstudio: tool loop limit ({self.max_iters}) reached",
+                raw_debug=self._note(f"tool loop limit ({self.max_iters}) reached"),
             ),
             notes,
         )
@@ -536,7 +575,7 @@ class LMStudioBackend(BaseBackend):
 
         duration = time.time() - started
         if isinstance(exc, (requests.ConnectionError,)):
-            status = CONNECT_ERROR_MSG
+            status = self._connect_error()
         elif isinstance(exc, requests.Timeout):
             status = f"error: timeout({int(duration)}s) - {self.name} was too slow to respond"
         else:
@@ -620,10 +659,25 @@ def list_model_ids(timeout_s: float = 1.5) -> list:
     /api/v0/models 는 state("loaded"/"not-loaded")까지 주지만 버전에 따라
     로드된 모델만 돌려주는 이슈가 있어 /v1/models 결과와 합친다.
     """
+    # 테스트/CI 는 이 조회를 끈다. 안 그러면 스위트가 개발 PC 에 떠 있는
+    # 진짜 서버를 두드리게 되고(포트 1234/11434/8000/8080), 결과가
+    # 머신마다 달라진다. 예전에 테스트가 사용자 서버에 실제로 lms unload
+    # 를 쐈던 사고와 같은 부류다.
+    if os.environ.get("LLMHUB_SKIP_MODEL_PROBE"):
+        return []
+
     now = time.time()
     if now - _MODEL_CACHE["at"] < _MODEL_CACHE_TTL:
         return list(_MODEL_CACHE["ids"])
 
+    # INPUT_TYPES 는 /object_info 요청마다 불리고, 그 요청은 ComfyUI 의 aiohttp
+    # 이벤트 루프에서 처리된다. 여기서 원격 주소를 물면 -- LM Studio 를 다른 PC 에
+    # 두고 그 PC 가 꺼져 있어 패킷이 드롭되는 경우 -- 두 번의 타임아웃만큼
+    # 웹서버 전체가 멎는다. 안 켜진 로컬 포트는 즉시 거절당해 사실상 공짜다.
+    # openai_compat 쪽 list_server_models 는 처음부터 loopback 만 봤는데,
+    # 먼저 있던 이쪽에는 그 방어가 없었다.
+    # 원격이면 아예 안 보는 대신 타임아웃만 짧게 준다 -- LAN 의 LM Studio 를
+    # 쓰는 사람에게서 목록 자체를 뺏지는 않으면서, 멎는 시간을 줄인다.
     ids = []
     problems = []
     try:
@@ -632,6 +686,8 @@ def list_model_ids(timeout_s: float = 1.5) -> list:
         full_cfg = load_config()
         cfg = full_cfg.get("lmstudio", {}) or {}
         base = (cfg.get("base_url") or "http://127.0.0.1:1234").rstrip("/")
+        if not is_loopback(base):
+            timeout_s = min(timeout_s, REMOTE_PROBE_TIMEOUT_S)
         headers = {}
         token = resolve_api_token(full_cfg)
         if token:

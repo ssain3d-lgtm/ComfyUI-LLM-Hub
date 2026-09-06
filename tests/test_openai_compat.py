@@ -26,6 +26,7 @@ LLMRequest = base.LLMRequest
 
 sys.path.insert(0, os.path.join(_PACK_ROOT, "tests"))
 from mock_lmstudio import MockLMStudio  # noqa: E402
+from probe_guard import allow_probe  # noqa: E402
 
 FIXTURES = os.path.join(_PACK_ROOT, "tests", "fixtures")
 
@@ -158,6 +159,10 @@ class TestServerModelList(unittest.TestCase):
     config_mod = importlib.import_module(f"{_PACK_NAME}.utils.config")
 
     def setUp(self):
+        # 조회 로직 자체를 보는 클래스라 스위트 전역 차단을 잠깐 푼다.
+        # 실제로 나가는 곳은 가짜 서버와 mock 뿐이다.
+        self._probe = allow_probe()
+        self._probe.__enter__()
         # 캐시가 테스트 사이에 새지 않게 매번 비운다.
         oc_mod._MODEL_CACHE["at"] = 0.0
         oc_mod._MODEL_CACHE["ids"] = []
@@ -165,6 +170,7 @@ class TestServerModelList(unittest.TestCase):
     def tearDown(self):
         oc_mod._MODEL_CACHE["at"] = 0.0
         oc_mod._MODEL_CACHE["ids"] = []
+        self._probe.__exit__(None, None, None)
 
     def test_loopback_is_recognized(self):
         for url in ("http://127.0.0.1:8080", "http://localhost:1234",

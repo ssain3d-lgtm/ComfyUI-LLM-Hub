@@ -563,10 +563,16 @@ Check this before running a batch: 100 prompts costs $1.4 even on haiku, and $19
 Offline verification, no logins or servers required:
 
 ```
-python -m unittest discover -s tests -p "test_*.py"
+python -m unittest discover -s tests -t . -p "test_*.py"
 ```
 
-**439 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+> The `-t .` matters. It makes `tests/` load as a package, and `tests/__init__.py`
+> switches off the model-server lookup for the whole run. Without it the suite
+> probes `127.0.0.1` on ports 1234 / 11434 / 8000 / 8080 — so if you have LM Studio
+> or Ollama running, the tests talk to your real server and widget defaults differ
+> per machine.
+
+**472 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -1170,10 +1176,15 @@ fable 이면 $19.6 입니다.
 로그인/서버 없이 도는 오프라인 검증:
 
 ```
-python -m unittest discover -s tests -p "test_*.py"
+python -m unittest discover -s tests -t . -p "test_*.py"
 ```
 
-**439종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+> `-t .` 가 중요합니다. 이게 있어야 `tests/` 가 패키지로 로드되고,
+> `tests/__init__.py` 가 실행 전체에서 모델 서버 조회를 꺼줍니다. 빼면 스위트가
+> `127.0.0.1` 의 1234 / 11434 / 8000 / 8080 을 두드려서, LM Studio 나 Ollama 를
+> 켜두셨다면 테스트가 실제 서버로 요청을 보내고 위젯 기본값도 머신마다 달라집니다.
+
+**472종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 
