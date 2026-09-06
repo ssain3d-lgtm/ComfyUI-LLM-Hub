@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -r requirements.txt
-      - run: python -m unittest discover -s tests -p "test_*.py" -v
+      - run: python -m unittest discover -s tests -t . -p "test_*.py" -v
 
   # Windows matters: it is the platform this pack is actually used on.
   #
@@ -41,4 +41,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -r requirements.txt
-      - run: python -m unittest discover -s tests -p "test_*.py"
+      - run: python -m unittest discover -s tests -t . -p "test_*.py"

@@ -27,6 +27,7 @@ lmstudio_mod = importlib.import_module(f"{_PACK_NAME}.backends.lmstudio")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mock_lmstudio import MockLMStudio  # noqa: E402
+from probe_guard import allow_probe  # noqa: E402
 
 TOKEN = "secret-token-do-not-log-12345"
 
@@ -40,6 +41,11 @@ def _reset_model_cache():
 
 class TestTokenResolution(unittest.TestCase):
     def setUp(self):
+        # 이 클래스는 모델 목록 조회 경로(토큰이 실려 나가는지)를 본다.
+        # 스위트 전역 차단을 잠깐 풀되, 상대는 가짜 서버뿐이다.
+        probe = allow_probe()
+        probe.__enter__()
+        self.addCleanup(probe.__exit__, None, None, None)
         _reset_model_cache()
         self.addCleanup(_reset_model_cache)
         # 이 테스트가 실제 사용자 환경변수를 물려받지 않게 지운다.

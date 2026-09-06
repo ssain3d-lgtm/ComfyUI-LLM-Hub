@@ -28,7 +28,7 @@ import time
 
 import os
 from .base import LLMRequest, LLMResponse, truncate_debug
-from .lmstudio import LMStudioBackend
+from .lmstudio import LMStudioBackend, is_loopback
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"  # Ollama 기본 포트
 
@@ -112,7 +112,7 @@ class OpenAICompatBackend(LMStudioBackend):
         if isinstance(exc, requests.ConnectionError):
             return LLMResponse(
                 status=(
-                    f"error: no response from the server ({self.base_url}). "
+                    f"error: no response from the {self.name} server ({self.base_url}). "
                     "Check the address and that the server is running "
                     "(Ollama 11434 / vLLM 8000 / llama.cpp 8080)"
                 ),
@@ -129,19 +129,8 @@ class OpenAICompatBackend(LMStudioBackend):
 _MODEL_CACHE = {"at": 0.0, "ids": []}
 _MODEL_CACHE_TTL = 10.0  # 초. INPUT_TYPES 가 자주 불려도 서버를 계속 두드리지 않게.
 
-# 조회 대상으로 삼는 호스트. 여기 없는 주소는 건드리지 않는다.
-_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0")
-
-
-def is_loopback(base_url: str) -> bool:
-    """이 주소가 내 컴퓨터를 가리키는가."""
-    try:
-        from urllib.parse import urlparse
-
-        host = (urlparse(base_url).hostname or "").lower()
-    except Exception:
-        return False
-    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+# is_loopback 은 lmstudio 로 옮겼다(그쪽도 같은 판정이 필요해졌고,
+# 이 모듈이 lmstudio 를 상속하므로 반대 방향 import 는 순환이 된다).
 
 
 def _probe(base_url: str, timeout_s: float, headers: dict) -> list:
@@ -179,6 +168,13 @@ def list_server_models(timeout_s: float = 1.5) -> list:
     실패해도 경고하지 않는다. 이 백엔드를 안 쓰는 사람이 대다수인데, 서버가
     안 떠 있다고 매번 로그를 남기면 그게 거짓 경보다.
     """
+    # 테스트/CI 는 이 조회를 끈다. 안 그러면 스위트가 개발 PC 에 떠 있는
+    # 진짜 서버를 두드리게 되고(포트 1234/11434/8000/8080), 결과가
+    # 머신마다 달라진다. 예전에 테스트가 사용자 서버에 실제로 lms unload
+    # 를 쐈던 사고와 같은 부류다.
+    if os.environ.get("LLMHUB_SKIP_MODEL_PROBE"):
+        return []
+
     now = time.time()
     if now - _MODEL_CACHE["at"] < _MODEL_CACHE_TTL:
         return list(_MODEL_CACHE["ids"])

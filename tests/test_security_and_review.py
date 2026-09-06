@@ -28,6 +28,81 @@ from test_cli_backends import FakeCli, _patch  # noqa: E402
 FIXTURES = os.path.join(_PACK_ROOT, "tests", "fixtures")
 
 
+class TestExtraArgsParsing(unittest.TestCase):
+    """따옴표는 벗기고 역슬래시는 남긴다.
+
+    예전에는 Windows 에서 posix=False 였다. 그 모드는 따옴표를 안 벗기는데
+    args 가 shell=False 로 넘어가므로, 자식 CLI 가 따옴표까지 포함한 값을
+    받았다. 관련 테스트가 win32 에서 skip 이라 CI 도 못 봤다.
+    """
+
+    def test_quotes_are_stripped(self):
+        got = proc.parse_extra_args('--append-system-prompt "be brief"')
+        self.assertEqual(got, ["--append-system-prompt", "be brief"])
+
+    def test_single_quotes_too(self):
+        got = proc.parse_extra_args("--flag 'two words'")
+        self.assertEqual(got, ["--flag", "two words"])
+
+    def test_windows_paths_survive(self):
+        """역슬래시를 이스케이프로 먹으면 C:workdocs 가 된다."""
+        got = proc.parse_extra_args(r"--add C:\work\docs")
+        self.assertEqual(got, ["--add", r"C:\work\docs"])
+
+    def test_quoted_windows_path(self):
+        got = proc.parse_extra_args(r'--add "C:\work\my docs"')
+        self.assertEqual(got, ["--add", r"C:\work\my docs"])
+
+    def test_empty_and_garbage_are_survivable(self):
+        self.assertEqual(proc.parse_extra_args(""), [])
+        self.assertEqual(proc.parse_extra_args("   "), [])
+        # 닫히지 않은 따옴표 -- 예외 대신 단순 분할로 떨어진다.
+        self.assertTrue(proc.parse_extra_args('--flag "unclosed'))
+
+
+class TestScreenCoversRealFlags(unittest.TestCase):
+    """차단목록은 CLI 3종이 문서화한 샌드박스 해제 플래그를 따라가야 한다.
+
+    README 는 조건 없이 "샌드박스를 푸는 플래그는 자동 차단" 이라고 약속한다.
+    구현이 손으로 관리하는 목록인 이상, 아는 구멍은 메워둔다.
+    """
+
+    def _blocked(self, text):
+        safe, rejected = proc.screen_extra_args(proc.parse_extra_args(text))
+        return safe, rejected
+
+    def test_codex_full_auto(self):
+        safe, rejected = self._blocked("--full-auto")
+        self.assertEqual(safe, [])
+        self.assertIn("--full-auto", rejected)
+
+    def test_codex_ask_for_approval(self):
+        for text in ("--ask-for-approval never", "-a never"):
+            with self.subTest(text=text):
+                safe, rejected = self._blocked(text)
+                self.assertEqual(safe, [], f"{text} 가 통과했다")
+
+    def test_gemini_include_directories(self):
+        safe, rejected = self._blocked("--include-directories /etc")
+        self.assertEqual(safe, [])
+
+    def test_camel_case_spelling_is_caught(self):
+        """gemini 는 yargs 라 --approvalMode 도 받는다. 소문자로만 낮추면
+        --approvalmode 가 되어 목록의 --approval-mode 와 안 맞는다."""
+        safe, rejected = self._blocked("--approvalMode yolo")
+        self.assertEqual(safe, [], "카멜케이스 표기가 통과했다")
+
+    def test_equals_form_is_caught(self):
+        safe, rejected = self._blocked("--approval-mode=yolo")
+        self.assertEqual(safe, [])
+
+    def test_harmless_flags_still_pass(self):
+        """차단이 너무 넓으면 쓸 수 있는 게 없어진다."""
+        safe, rejected = self._blocked("--verbose --model sonnet")
+        self.assertEqual(rejected, [])
+        self.assertEqual(safe, ["--verbose", "--model", "sonnet"])
+
+
 class TestExtraArgsSandbox(unittest.TestCase):
     """보안 HIGH: extra_args 로 읽기 전용 잠금을 풀 수 없어야 한다."""
 

@@ -535,8 +535,14 @@ class LLMHubGenerate:
                 req = LLMRequest(
                     backend=backend,
                     model=chosen_model,
-                    system_prompt=system_prompt or "",
-                    user_prompt=prompt or "",
+                    # 다른 문자열 위젯은 모두 _as_text 를 거치는데 이 둘만 빠져
+                    # 있었다. 하필 인덱스 1~2 -- widgets_values 가 밀리면 제일
+                    # 먼저 당하는 자리다. 백엔드의 except 가 잡아주긴 하지만,
+                    # status 가 "AttributeError: 'bool' object has no attribute
+                    # 'strip'" 같은 내부 오류로 나간다. 그걸 없애려고 만든 것이
+                    # _as_text 다.
+                    system_prompt=_as_text(system_prompt),
+                    user_prompt=_as_text(prompt),
                     image_paths=run_images,
                     video_paths=video_paths,
                     video_max_frames=_as_number(video_max_frames, 8),
@@ -550,8 +556,25 @@ class LLMHubGenerate:
                     extra_args=_as_text(extra_args),
                     extra_body=extra_body_dict,
                     base_url_override=_as_text(openai_base_url),
-                    ttl_sec=_as_number(lmstudio_ttl_sec, 300),
-                    unload_after=bool(lmstudio_unload_after),
+                    # lmstudio_* 위젯은 LM Studio 에서만 보인다(프론트엔드의
+                    # BACKEND_ONLY). 그런데 값 자체는 항상 넘어가고 있어서,
+                    # ollama/vllm/llamacpp 로 돌리면 위젯 기본값 True 가 그대로
+                    # 전달돼 "이 백엔드에는 언로드가 없다" 는 안내가 매 실행마다
+                    # debug 에 붙었다. 할 수 있는 게 없다는 말을 매번 하는 건
+                    # 잡음이다. None 을 주면 각 백엔드가 자기 설정을 따른다.
+                    ttl_sec=(
+                        _as_number(lmstudio_ttl_sec, 300)
+                        if backend == "lmstudio" else None
+                    ),
+                    # one_per_image 는 장마다 백엔드를 부르는데, LM Studio 백엔드는
+                    # 호출마다 VRAM 에서 모델을 내린다. 그대로 두면 40장짜리
+                    # 캡션 작업이 모델을 40번 다시 로드한다 -- 이 모드를 만든
+                    # 이유가 바로 그 작업인데 가장 느린 방식이 되는 셈이다.
+                    # 마지막 장에서만 내린다.
+                    unload_after=(
+                        bool(lmstudio_unload_after) and (index == len(runs) - 1)
+                        if backend == "lmstudio" else None
+                    ),
                     emitter=emitter,
                 )
 

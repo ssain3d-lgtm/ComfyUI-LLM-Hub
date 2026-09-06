@@ -168,6 +168,43 @@ class TestWrongTypesNeverCrash(unittest.TestCase):
         out = self._run(lmstudio_unload_after="(auto)")
         self.assertEqual(out["result"][1], "ok")
 
+    def test_the_backend_always_receives_strings_for_the_prompt_slots(self):
+        """prompt / system_prompt 는 인덱스 1~2 -- 값이 밀리면 제일 먼저 당한다.
+
+        예전에는 이 둘만 _as_text 를 안 거쳐서 bool 이나 int 가 그대로
+        백엔드까지 갔다. 그러면 status 가 "AttributeError: 'bool' object has
+        no attribute 'strip'" 같은 내부 오류로 나간다 -- 그런 문구를 없애려고
+        만든 것이 _as_text 다.
+
+        "노드가 죽지 않는가" 로는 이걸 못 잡는다. 가짜 백엔드는 .strip() 을
+        부르지 않으니 무엇이 들어오든 ok 다(변이 실험에서 실제로 통과했다).
+        백엔드가 **무엇을 받았는지**를 봐야 한다.
+        """
+        seen = []
+
+        class Spy:
+            def generate(self, req):
+                seen.append((req.system_prompt, req.user_prompt))
+                return base.LLMResponse(text="x", status="ok")
+
+        args = dict(
+            backend="lmstudio", prompt="hi", system_prompt="", model="",
+            file_access=False, workspace_dir="", temperature=0.7, max_tokens=64,
+            timeout_sec=10, stream_view="off", seed=0,
+        )
+        for value in (True, 300, None, ["a"]):
+            for slot in ("system_prompt", "prompt"):
+                with self.subTest(value=value, slot=slot):
+                    seen.clear()
+                    call = dict(args, **{slot: value})
+                    with mock.patch.object(nodes_mod, "get_backend", return_value=Spy()):
+                        out = nodes_mod.LLMHubGenerate().generate(**call)
+                    self.assertEqual(out["result"][1], "ok", out["result"][1])
+                    self.assertTrue(seen, "백엔드가 안 불렸다")
+                    system_prompt, user_prompt = seen[0]
+                    self.assertIsInstance(system_prompt, str)
+                    self.assertIsInstance(user_prompt, str)
+
     def test_none_everywhere_is_survivable(self):
         out = self._run(model=None, workspace_dir=None, video_path=None,
                         mcp_config=None, extra_args=None, openai_base_url=None)

@@ -74,7 +74,31 @@ _UNSAFE_EXACT_MARKERS = (
     "--sandbox", "-s", "--approval-mode", "--yolo", "-y",
     "--add-dir", "--mcp-config", "--agents", "--agent",
     "--setting", "--settings", "-c", "--config", "--enable",
+    # --- 검토에서 나온 누락분 ---
+    # codex --full-auto: --sandbox workspace-write + 자동 승인의 별칭이다.
+    #   노드가 붙인 -s read-only 뒤에 오므로 어느 쪽이 이기는지는 codex 의
+    #   우선순위가 정한다 -- 우리가 정하는 게 아니다.
+    "--full-auto",
+    # codex -a / --ask-for-approval: 권한 상승 요청 정책.
+    "-a", "--ask-for-approval",
+    # gemini --include-directories: claude 의 --add-dir 에 해당한다.
+    "--include-directories", "--include-dir",
 )
+
+
+def _normalize_flag(token: str) -> str:
+    """플래그 표기를 하나로 모아 비교한다.
+
+    gemini 는 yargs 를 쓰는데 기본 설정(camel-case-expansion)에서 --approvalMode
+    와 --approval-mode 를 둘 다 받는다. 소문자로만 낮추면 --approvalmode 가 되어
+    목록의 --approval-mode 와 안 맞는다 -- 차단목록을 그냥 지나간다.
+    비교 전에 하이픈을 떼고 소문자로 맞춘 뒤, 목록도 같은 방식으로 정규화한다.
+    """
+    return token.lower().replace("-", "")
+
+
+def _normalized_markers():
+    return tuple(_normalize_flag(m) for m in _UNSAFE_EXACT_MARKERS)
 
 
 def screen_extra_args(tokens: list) -> tuple:
@@ -92,15 +116,18 @@ def screen_extra_args(tokens: list) -> tuple:
     i = 0
     while i < len(tokens):
         token = tokens[i]
-        low = token.lower()
+        low = _normalize_flag(token)
 
-        if any(low.startswith(m) for m in _UNSAFE_PREFIX_MARKERS):
+        if any(low.startswith(_normalize_flag(m)) for m in _UNSAFE_PREFIX_MARKERS):
             rejected.append(token)
             i += 1
             continue
 
-        exact = low in _UNSAFE_EXACT_MARKERS
-        with_value = any(low.startswith(m + "=") for m in _UNSAFE_EXACT_MARKERS)
+        markers = _normalized_markers()
+        # "--flag=value" 는 정규화하면 "--flag=value" 의 하이픈만 빠진다.
+        head = low.split("=", 1)[0]
+        exact = head in markers and "=" not in token
+        with_value = head in markers and "=" in token
         if exact or with_value:
             rejected.append(token)
             # "--flag value" 형태면 다음 토큰(값)도 함께 버린다.
@@ -120,13 +147,23 @@ def screen_extra_args(tokens: list) -> tuple:
 def parse_extra_args(extra_args: str) -> list:
     """extra_args 문자열을 argv 리스트로 파싱한다 (DESIGN §9).
 
-    Windows 에서만 posix=False (역슬래시 경로 보호). 리눅스/맥에서 posix=False 를
-    쓰면 따옴표가 argv 에 그대로 남는 문제가 있어 플랫폼으로 가른다.
+    예전에는 Windows 에서 posix=False 를 썼다. 역슬래시 경로(C:\\work\\docs)를
+    이스케이프로 먹지 않게 하려던 것인데, 그 모드는 **따옴표를 벗기지 않는다**.
+    args 는 리스트로 shell=False 에 넘어가므로 자식 CLI 가
+        --append-system-prompt "be brief"
+    를 따옴표까지 포함한 한 덩어리로 받았다. Windows 가 이 팩의 주 플랫폼이고,
+    관련 테스트는 win32 에서 skip 이라 CI 도 못 봤다.
+
+    posix 렉서를 쓰되 escape 문자를 비워 두 성질을 동시에 얻는다:
+    따옴표는 벗겨지고, 역슬래시는 글자 그대로 남는다.
     """
     if not extra_args or not extra_args.strip():
         return []
     try:
-        return shlex.split(extra_args, posix=(sys.platform != "win32"))
+        lexer = shlex.shlex(extra_args, posix=True)
+        lexer.whitespace_split = True
+        lexer.escape = ""  # C:\\work\\docs 가 C:workdocs 가 되지 않게
+        return list(lexer)
     except ValueError:
         return extra_args.split()
 
@@ -346,6 +383,18 @@ def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 30
     for thread in threads:
         thread.join(timeout=5)
 
+    # 파이프를 안 닫으면 fd 가 Popen 이 수거될 때까지 남는다. 더 나쁜 경우는
+    # 죽인 프로세스의 손자가 쓰기 끝을 쥐고 있을 때다 -- pump 스레드가
+    # `for line in proc.stdout` 에서 영원히 막히고, 위의 join(timeout=5) 는
+    # 조용히 포기한다. 그러면 그 데몬 스레드와 Popen(과 fd)이 ComfyUI 가 살아
+    # 있는 내내 남는다. Stop 을 누를 때마다 하나씩.
+    for pipe in (proc.stdin, proc.stdout, proc.stderr):
+        try:
+            if pipe is not None:
+                pipe.close()
+        except Exception:
+            pass
+
     _unregister(node_id)
 
     duration = time.time() - started
@@ -354,4 +403,7 @@ def run_cli_stream(args: list, *, cwd: str, stdin_text=None, timeout_s: int = 30
 
     if timed_out:
         return -1, stdout, stderr + f"\nerror: timeout({timeout_s}s)", duration
-    return proc.returncode, stdout, stderr, duration
+    # wait(timeout=10) 이 만료되면 returncode 가 None 으로 남는다. 그대로 두면
+    # 백엔드가 "codex exit code None" 같은 문구를 내놓는다.
+    code = proc.returncode
+    return (-1 if code is None else code), stdout, stderr, duration
