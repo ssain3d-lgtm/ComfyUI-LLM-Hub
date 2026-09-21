@@ -422,24 +422,24 @@ function applyMonitorVisibility(node, mode) {
 //
 // 숨겨도 값은 그대로 직렬화된다(litegraph 는 위젯을 저장할 때 type 을 보지 않는다).
 // 그래서 required 위젯을 숨겨도 프롬프트에서 빠지지 않는다.
-// ollama / vllm / llamacpp 는 openai_compat 과 같은 구현이라 위젯이 보이는
+// ollama / vllm / llamacpp / ninfer 는 openai_compat 과 같은 구현이라 위젯이 보이는
 // 조건도 같다. 상수로 빼서 펼치고 싶지만 일부러 이름을 다 적는다 --
 // tests/test_widget_visibility.py 가 이 리터럴을 **텍스트로 파싱**해서
 // nodes.py 의 백엔드 목록과 대조하기 때문에, 스프레드를 쓰면 파서가 아무것도
 // 못 읽고 검사가 조용히 통과해버린다.
 const BACKEND_ONLY = {
-  openai_base_url: ["openai_compat", "ollama", "vllm", "llamacpp"],
+  openai_base_url: ["openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   claude_model: ["claude"],
   lmstudio_model: ["lmstudio"],
-  server_model: ["openai_compat", "ollama", "vllm", "llamacpp"],
+  server_model: ["openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   lmstudio_ttl_sec: ["lmstudio"],
   lmstudio_unload_after: ["lmstudio"],
-  temperature: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp"],
-  max_tokens: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp"],
+  temperature: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
+  max_tokens: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   mcp_config: ["claude"],
-  video_max_frames: ["lmstudio", "claude", "codex", "openai_compat", "ollama", "vllm", "llamacpp"],
+  video_max_frames: ["lmstudio", "claude", "codex", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   // extra_body 는 HTTP payload 에 합치는 물건이라 CLI 3종에는 합칠 자리가 없다.
-  extra_body: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp"],
+  extra_body: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
 };
 
 // 접었을 때 숨는 위젯. 여기 없는 것 = 항상 보이는 것이다:
@@ -466,12 +466,12 @@ const ADVANCED = [
 //
 // openai_base_url 은 openai_compat 에서는 항상 보여야 한다 -- 미리 잡아둔 주소가
 // 없어서 사용자가 직접 넣거나 config.json 에 적어야 하기 때문이다.
-// 반대로 ollama / vllm / llamacpp 는 고른 순간 표준 포트가 이미 잡힌다. 그런데도
+// 반대로 ollama / vllm / llamacpp / ninfer 는 고른 순간 표준 포트가 이미 잡힌다. 그런데도
 // 빈 주소 칸이 눈에 잘 띄는 자리(모델 드롭다운이 있던 그 자리)에 남아 있으면
 // "여기를 채워야 도는구나" 로 읽힌다 -- 안 채워도 도는데.
 // 그래서 이 셋에서는 접어두고, 표준 포트가 아닌 곳에 띄운 사람만 펼쳐서 쓴다.
 const ADVANCED_FOR = {
-  openai_base_url: ["ollama", "vllm", "llamacpp"],
+  openai_base_url: ["ollama", "vllm", "llamacpp", "ninfer"],
 };
 
 const SHOW_ADVANCED_PROP = "showAdvanced";
@@ -897,7 +897,7 @@ function refreshPresetWidget(node, presets, select) {
 // 덕분에 이 기능은 파이썬을 건드리지 않고 -- 즉 ComfyUI 재시작 없이 -- 끝난다.
 
 // 모델 드롭다운은 이제 둘이다. lmstudio_model 은 LM Studio 를, server_model 은
-// 이 컴퓨터에 떠 있는 OpenAI 호환 서버(ollama/vllm/llamacpp)를 본다.
+// 이 컴퓨터에 떠 있는 OpenAI 호환 서버(ollama/vllm/llamacpp/ninfer)를 본다.
 // 둘 다 INPUT_TYPES 가 만들므로 같은 방법으로 한 번에 새로 받아온다.
 const MODEL_WIDGETS = ["lmstudio_model", "server_model"];
 // 어느 백엔드에서 어느 드롭다운을 보는지. BACKEND_ONLY 와 같은 내용이지만
@@ -908,6 +908,7 @@ const MODEL_WIDGET_FOR = {
   ollama: "server_model",
   vllm: "server_model",
   llamacpp: "server_model",
+  ninfer: "server_model",
 };
 const CONNECT_KEY = "_llmhubConnectLabel";
 const CONNECT_TIMER = "_llmhubConnectTimer";
