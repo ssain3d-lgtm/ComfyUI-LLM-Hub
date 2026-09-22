@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
-"""OpenAI 호환 서버 백엔드 (Ollama / vLLM / llama.cpp 등).
+"""OpenAI 호환 서버 백엔드 (Ollama / vLLM / llama.cpp / NInfer 등).
 
-셋 다 /v1/chat/completions 를 그대로 제공한다. 그래서 새 구현이 아니라
+모두 /v1/chat/completions 를 그대로 제공한다. 그래서 새 구현이 아니라
 LM Studio 백엔드를 그대로 물려받아 base_url 만 바꾼다 -- 검증된 경로를
 재사용하는 것이 새로 짜는 것보다 안전하다.
 
   Ollama     http://127.0.0.1:11434
   vLLM       http://127.0.0.1:8000
   llama.cpp  http://127.0.0.1:8080
+  NInfer     http://127.0.0.1:8081
 
 LM Studio 전용이라 갈라야 하는 것은 셋뿐이다.
 
@@ -17,9 +18,19 @@ LM Studio 전용이라 갈라야 하는 것은 셋뿐이다.
   lms unload : LM Studio CLI 다. 다른 서버에는 없으므로 안내만 남긴다.
   /api/v0/models : LM Studio 전용 확장이다. 모델은 노드의 model 칸에 직접 적는다.
 
-주의: 이 백엔드는 실기기 검증을 하지 못했다. LM Studio 로 검증된 코드 경로를
+주의: Ollama / vLLM / llama.cpp 는 실기기 검증을 하지 못했다. LM Studio 로 검증된 코드 경로를
 그대로 쓰지만, 서버마다 다른 부분(SSE 청크 모양, 오류 응답 형식)은 실측 없이
 확인할 수 없다. README 에도 같은 취지를 적어둔다.
+
+NInfer 만 실기기로 확인했다 (2026-09-19~21, ninfer-serve, Qwen3.8-27B NVFP4, RTX 5090):
+  - 모르는 최상위 필드(ttl, keep_alive, llama.cpp 전용 필드)는 무시하고 200. 그래도 ttl 은 다른 별칭처럼 보내지 않는다.
+  - 스트리밍 thinking 은 delta.reasoning_content, 응답에 llama.cpp 호환 timings. seed, stream_options.include_usage 수용.
+  - tools + tool_choice "auto" 지원 (required / named tool choice, strict:true 는 거부).
+  - 요청의 model 은 서버의 공개 ID(/v1/models)와 **같아야 한다**. server_model 드롭다운이 그 ID 를 읽어 온다.
+  - 거부하는 것: top_k > 20, 음수 max_tokens, JSON 강제 출력, logprobs, 오디오 입력.
+  - 언로드 API 도 유휴 언로드도 없다. 프로세스가 사는 동안 모델이 VRAM 에 상주한다 -> unload_model 참고.
+  - thinking 은 기본으로 켜져 있다. 끄려면 extra_body 에 {"reasoning_effort": "none"}.
+    ("/no_think" 텍스트는 효과가 없고 프롬프트만 오염시킨다. top-level enable_thinking 도 듣지 않는다 -- 실측.)
 """
 
 from __future__ import annotations
@@ -42,6 +53,7 @@ KNOWN_SERVERS = {
     "ollama": "http://127.0.0.1:11434",
     "vllm": "http://127.0.0.1:8000",
     "llamacpp": "http://127.0.0.1:8080",
+    "ninfer": "http://127.0.0.1:8081",
 }
 
 
@@ -52,7 +64,7 @@ class OpenAICompatBackend(LMStudioBackend):
         # 부모의 LM Studio 설정을 먼저 읽은 뒤 이 백엔드 것으로 덮어쓴다.
         super().__init__(config=config)
         section = (self.config.get("openai_compat", {}) or {})
-        # base_url_default 는 별칭 백엔드(ollama/vllm/llamacpp)가 넘기는 표준 포트다.
+        # base_url_default 는 별칭 백엔드(ollama/vllm/llamacpp/ninfer)가 넘기는 표준 포트다.
         # config 값보다 앞에 두는 이유: 드롭다운에서 "llamacpp" 를 고른 것 자체가
         # 어느 서버를 쓸지 명시한 것이라, 범용 설정값이 그걸 덮으면 놀란다.
         # 노드의 openai_base_url 을 채우면 apply_base_url 로 그쪽이 최종적으로 이긴다.
@@ -100,6 +112,15 @@ class OpenAICompatBackend(LMStudioBackend):
         return payload
 
     def unload_model(self, model_id: str) -> str:
+        if self.name == "ninfer":
+            # 이 노드의 unload 는 "생성 후 VRAM 비우기" 다. NInfer 에는 그 수단이 아예 없다 -- 언로드 API 도,
+            # 유휴 언로드도 없고 GPU 상주가 프로세스 시작 때 고정된다. 다른 서버용 안내(`ollama stop`)를
+            # 그대로 내면 틀린 안내이고, 내렸다고 하면 거짓말이다.
+            return (
+                "unload: NInfer keeps the model in VRAM for as long as its process lives - there is no "
+                "unload API and no idle unload. To free the VRAM, stop the server (the Stop button of "
+                "the NInfer config UI, or end the ninfer-serve process)."
+            )
         return (
             "unload: this backend has no immediate unload. "
             "Use `ollama stop <model>`, or shut down the vLLM / llama.cpp server."
@@ -114,7 +135,7 @@ class OpenAICompatBackend(LMStudioBackend):
                 status=(
                     f"error: no response from the {self.name} server ({self.base_url}). "
                     "Check the address and that the server is running "
-                    "(Ollama 11434 / vLLM 8000 / llama.cpp 8080)"
+                    "(Ollama 11434 / vLLM 8000 / llama.cpp 8080 / NInfer 8081)"
                 ),
                 duration_s=duration,
                 raw_debug=truncate_debug("\n".join(debug_notes + [repr(exc)])),

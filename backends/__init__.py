@@ -10,7 +10,9 @@ from .base import BaseBackend, LLMRequest, LLMResponse
 #
 # 별칭을 만든 이유는 발견성이다. llama.cpp 를 쓰려면 "openai_compat 이 그거다" 를
 # 먼저 알아야 했는데, 드롭다운 어디에도 llama.cpp 라는 글자가 없었다.
-OPENAI_COMPAT_ALIASES = ("ollama", "vllm", "llamacpp")
+#
+# ninfer 는 NInfer(`ninfer-serve`)다. 다른 셋과 달리 실기기로 확인했다 -- backends/openai_compat.py 참고.
+OPENAI_COMPAT_ALIASES = ("ollama", "vllm", "llamacpp", "ninfer")
 
 # 새 이름은 반드시 "맨 뒤에만" 붙인다. 저장된 워크플로우가 콤보를 어떻게 들고
 # 있든(문자열이든 인덱스든) 뒤에 붙이는 것은 안전하지만, 중간에 끼우거나 순서를
@@ -18,6 +20,7 @@ OPENAI_COMPAT_ALIASES = ("ollama", "vllm", "llamacpp")
 BACKEND_NAMES = [
     "lmstudio", "claude", "codex", "gemini", "openai_compat",
     "ollama", "vllm", "llamacpp",
+    "ninfer",
 ]
 
 

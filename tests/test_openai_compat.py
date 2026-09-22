@@ -86,6 +86,7 @@ class TestAliases(unittest.TestCase):
             "ollama": "http://127.0.0.1:11434",
             "vllm": "http://127.0.0.1:8000",
             "llamacpp": "http://127.0.0.1:8080",
+            "ninfer": "http://127.0.0.1:8081",
         }
         # 목록이 늘면 여기도 늘려야 한다. 조용히 빠지지 않게 개수를 먼저 본다.
         self.assertEqual(set(expected), set(backends.OPENAI_COMPAT_ALIASES))
@@ -373,6 +374,48 @@ class TestBaseUrl(unittest.TestCase):
         resp = b.generate(LLMRequest("openai_compat", "", "", "안녕", timeout_s=5))
         self.assertIn("127.0.0.1:1", resp.status)
         self.assertIn("11434", resp.status)  # 흔한 포트 안내
+
+
+class TestNInfer(unittest.TestCase):
+    """NInfer (`ninfer-serve`, 포트 8081) 별칭.
+
+    다른 별칭과 달리 실기기로 확인했다 (2026-09-19~21, Qwen3.8-27B NVFP4, RTX 5090):
+    모르는 최상위 필드(ttl 등)는 무시하고 200, 스트리밍 thinking 은 reasoning_content,
+    tool_choice "auto" 는 지원. 요청의 model 은 서버의 공개 ID 와 같아야 한다.
+    """
+
+    def test_it_is_appended_after_every_existing_name(self):
+        self.assertEqual(
+            backends.BACKEND_NAMES,
+            ["lmstudio", "claude", "codex", "gemini", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
+        )
+
+    def test_unload_tells_the_truth_about_ninfer(self):
+        """NInfer 에는 언로드 API 도 유휴 언로드도 없다. 프로세스가 사는 동안 모델이 상주한다.
+        `ollama stop` 을 권하면 틀린 안내이고, 내렸다고 하면 거짓말이다."""
+        note = backends.get_backend("ninfer").unload_model("qwen3.8-27b")
+        self.assertIn("NInfer", note)
+        self.assertIn("stop", note.lower())
+        self.assertNotIn("ollama", note.lower())
+        self.assertNotIn("unloaded", note.lower())
+
+    def test_the_other_servers_keep_their_own_hint(self):
+        self.assertIn("ollama stop", backends.get_backend("llamacpp").unload_model("m"))
+
+    def test_a_dead_ninfer_is_reported_with_its_port_and_where_to_start_it(self):
+        impl = backends.get_backend("ninfer")
+        impl.apply_base_url("http://127.0.0.1:1")
+        resp = impl.generate(LLMRequest("ninfer", "", "", "hi", timeout_s=5))
+        self.assertIn("ninfer", resp.status)
+        self.assertIn("8081", resp.status)
+
+    def test_unload_after_generation_leaves_the_honest_note(self):
+        with MockLMStudio() as server:
+            impl = backends.get_backend("ninfer")
+            impl.apply_base_url(server.base_url)
+            resp = impl.generate(LLMRequest("ninfer", "m", "", "hi", unload_after=True, timeout_s=5))
+        self.assertTrue(resp.status.startswith("ok"), resp.status)
+        self.assertIn("NInfer", resp.raw_debug)
 
 
 class TestBaseUrlSentinel(unittest.TestCase):

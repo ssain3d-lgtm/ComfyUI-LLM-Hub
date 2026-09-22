@@ -188,9 +188,9 @@ class LLMHubGenerate:
                 "backend": (BACKEND_NAMES, {
                     "tooltip": "Which LLM to use. claude/codex/gemini = subscription CLIs; "
                                "everything else talks to a local server over HTTP. "
-                               "ollama / vllm / llamacpp are the same backend as "
+                               "ollama / vllm / llamacpp / ninfer are the same backend as "
                                "openai_compat, just preset to that server's standard port "
-                               "(11434 / 8000 / 8080) so you do not have to type it. "
+                               "(11434 / 8000 / 8080 / 8081) so you do not have to type it. "
                                "Each backend must already be installed and running.",
                 }),
                 "prompt": ("STRING", {"multiline": True, "default": "",
@@ -301,8 +301,8 @@ class LLMHubGenerate:
                     "default": "",
                     "tooltip": "Address of the OpenAI-compatible server. Fill this in only "
                                "when the server is not at the standard port — for the "
-                               "ollama / vllm / llamacpp backends it is already set "
-                               "(11434 / 8000 / 8080), and for openai_compat an empty box "
+                               "ollama / vllm / llamacpp / ninfer backends it is already set "
+                               "(11434 / 8000 / 8080 / 8081), and for openai_compat an empty box "
                                "uses openai_compat.base_url from config.json. "
                                "Leave '/v1' off the end; the node appends "
                                "/v1/chat/completions itself."}),
@@ -333,7 +333,7 @@ class LLMHubGenerate:
                                "by the node and cannot be overridden."}),
                 # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
                 "server_model": ([AUTO_MODEL] + list_server_models(), {
-                    "tooltip": "[openai_compat/ollama/vllm/llamacpp] Model dropdown, read "
+                    "tooltip": "[openai_compat/ollama/vllm/llamacpp/ninfer] Model dropdown, read "
                                "from whichever of those servers is running on this machine. "
                                "Start the server, then press the refresh button on the title "
                                "bar. (auto) = follow the model field above. Only local "
@@ -558,7 +558,7 @@ class LLMHubGenerate:
                     base_url_override=_as_text(openai_base_url),
                     # lmstudio_* 위젯은 LM Studio 에서만 보인다(프론트엔드의
                     # BACKEND_ONLY). 그런데 값 자체는 항상 넘어가고 있어서,
-                    # ollama/vllm/llamacpp 로 돌리면 위젯 기본값 True 가 그대로
+                    # ollama/vllm/llamacpp/ninfer 로 돌리면 위젯 기본값 True 가 그대로
                     # 전달돼 "이 백엔드에는 언로드가 없다" 는 안내가 매 실행마다
                     # debug 에 붙었다. 할 수 있는 게 없다는 말을 매번 하는 건
                     # 잡음이다. None 을 주면 각 백엔드가 자기 설정을 따른다.
