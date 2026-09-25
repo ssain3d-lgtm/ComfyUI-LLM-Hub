@@ -39,6 +39,7 @@ WIDGET_ORDER = [
     "video_path", "mcp_config", "extra_args",
     "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
     "openai_base_url", "system_preset", "batch_mode", "extra_body", "server_model",
+    "unload_after_generation",
 ]
 
 # 릴리스별로 "그때 배포된 순서" 를 그대로 박아둔 원장.
@@ -154,15 +155,15 @@ def _batch_status(statuses, total: int) -> str:
     return f"ok - {total} images"
 
 
-def _ls_default(key, fallback):
-    """config.json 의 lmstudio 설정을 위젯 기본값으로 쓴다.
+def _ls_default(key, fallback, section="lmstudio"):
+    """config.json 의 설정(기본 lmstudio 섹션)을 위젯 기본값으로 쓴다.
 
     설정 파일 값이 실제로 노드에 반영되게 하려면 여기서 읽어야 한다.
     """
     try:
         from .utils.config import load_config
 
-        value = (load_config().get("lmstudio", {}) or {}).get(key)
+        value = (load_config().get(section, {}) or {}).get(key)
         return fallback if value is None else value
     except Exception:
         return fallback
@@ -339,6 +340,20 @@ class LLMHubGenerate:
                                "bar. (auto) = follow the model field above. Only local "
                                "servers are listed — for a remote or paid endpoint, type the "
                                "name into model instead."}),
+                # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
+                #
+                # lmstudio_unload_after 의 OpenAI 호환 서버판. 이름을 따로 둔 이유:
+                # 그 위젯의 기본값(True)은 LM Studio 설정에서 오고, 서버마다 언로드
+                # 수단이 달라서(없는 서버도 있다) 기본값도 달라야 한다.
+                "unload_after_generation": ("BOOLEAN", {
+                    "default": _ls_default("unload_after", False, section="openai_compat"),
+                    "tooltip": "[openai_compat/ollama/vllm/llamacpp/ninfer] Load the model, "
+                               "generate, then unload it right away so the VRAM is free for "
+                               "the image model. The model is loaded again on the next run. "
+                               "Ollama: keep_alive 0. llama.cpp: router mode only "
+                               "(/models/unload). vLLM: sleep mode (needs --enable-sleep-mode "
+                               "and VLLM_SERVER_DEV_MODE=1; woken up before the next run). "
+                               "NInfer has no unload. What happened is written to debug."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -394,6 +409,7 @@ class LLMHubGenerate:
         server_model=AUTO_MODEL,
         batch_mode=BATCH_ALL,
         extra_body="",
+        unload_after_generation=False,
         unique_id=None,
     ):
         # 노드는 어떤 경우에도 예외를 밖으로 던지지 않는다 (DESIGN N4, §5-3).
@@ -521,6 +537,19 @@ class LLMHubGenerate:
                         "result": ("", status_out, _as_text(openai_base_url)),
                     }
 
+            # 생성 후 VRAM 에서 모델을 내릴지. 백엔드마다 자기 위젯만 본다.
+            # None = 백엔드가 자기 config 를 따른다(CLI 3종에는 언로드가 없다).
+            #
+            # lmstudio_* 위젯은 LM Studio 에서만 보인다(프론트엔드의 BACKEND_ONLY).
+            # 그런데 값 자체는 항상 넘어오므로, 다른 백엔드에 흘리면 화면에 없는
+            # 위젯이 동작을 바꾼다. OpenAI 호환 서버는 unload_after_generation 을 본다.
+            if backend == "lmstudio":
+                unload_wanted = bool(lmstudio_unload_after)
+            elif backend in OPENAI_COMPAT_BACKENDS:
+                unload_wanted = bool(unload_after_generation)
+            else:
+                unload_wanted = None
+
             texts, statuses, run_debug = [], [], []
             total_duration = 0.0
 
@@ -556,24 +585,20 @@ class LLMHubGenerate:
                     extra_args=_as_text(extra_args),
                     extra_body=extra_body_dict,
                     base_url_override=_as_text(openai_base_url),
-                    # lmstudio_* 위젯은 LM Studio 에서만 보인다(프론트엔드의
-                    # BACKEND_ONLY). 그런데 값 자체는 항상 넘어가고 있어서,
-                    # ollama/vllm/llamacpp/ninfer 로 돌리면 위젯 기본값 True 가 그대로
-                    # 전달돼 "이 백엔드에는 언로드가 없다" 는 안내가 매 실행마다
-                    # debug 에 붙었다. 할 수 있는 게 없다는 말을 매번 하는 건
-                    # 잡음이다. None 을 주면 각 백엔드가 자기 설정을 따른다.
+                    # lmstudio_ttl_sec 도 LM Studio 전용이다(위의 unload_wanted
+                    # 주석 참고). None 을 주면 각 백엔드가 자기 설정을 따른다.
                     ttl_sec=(
                         _as_number(lmstudio_ttl_sec, 300)
                         if backend == "lmstudio" else None
                     ),
-                    # one_per_image 는 장마다 백엔드를 부르는데, LM Studio 백엔드는
-                    # 호출마다 VRAM 에서 모델을 내린다. 그대로 두면 40장짜리
-                    # 캡션 작업이 모델을 40번 다시 로드한다 -- 이 모드를 만든
-                    # 이유가 바로 그 작업인데 가장 느린 방식이 되는 셈이다.
-                    # 마지막 장에서만 내린다.
+                    # one_per_image 는 장마다 백엔드를 부르는데, 백엔드는 호출마다
+                    # VRAM 에서 모델을 내린다. 그대로 두면 40장짜리 캡션 작업이
+                    # 모델을 40번 다시 로드한다 -- 이 모드를 만든 이유가 바로 그
+                    # 작업인데 가장 느린 방식이 되는 셈이다. 마지막 장에서만 내린다.
+                    # (중간에 Stop 으로 끊기면 루프 뒤에서 대신 내린다.)
                     unload_after=(
-                        bool(lmstudio_unload_after) and (index == len(runs) - 1)
-                        if backend == "lmstudio" else None
+                        None if unload_wanted is None
+                        else unload_wanted and (index == len(runs) - 1)
                     ),
                     emitter=emitter,
                 )
@@ -589,6 +614,22 @@ class LLMHubGenerate:
                     run_debug.append(f"[{index + 1}] {response.status}")
                 if response.raw_debug:
                     run_debug.append(response.raw_debug)
+
+            # 장별 루프가 Stop 으로 중간에 끊기면 "마지막 장에서 내린다" 가 오지
+            # 않는다. 그대로 두면 모델이 VRAM 에 남아 다음 이미지 모델이 밀려난다.
+            # 한 장이라도 돌았을 때만 내린다(안 돌았으면 올린 적도 없다).
+            if (
+                unload_wanted
+                and statuses
+                and len(statuses) < len(runs)
+                and hasattr(impl, "unload_model")
+            ):
+                try:
+                    run_debug.append(impl.unload_model(
+                        getattr(impl, "_served_model", "") or chosen_model
+                    ))
+                except Exception as exc:
+                    run_debug.append(f"unload: failed - {type(exc).__name__}: {exc}")
 
             if per_image:
                 # 중간에 멈췄으면 남은 자리를 채워 순서를 유지한다.

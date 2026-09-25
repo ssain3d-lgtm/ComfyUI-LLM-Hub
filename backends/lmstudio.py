@@ -40,6 +40,21 @@ CONNECT_ERROR_TEMPLATE = (
 # 원격 주소를 조회할 때의 상한. 이벤트 루프를 오래 잡고 있으면 안 된다.
 REMOTE_PROBE_TIMEOUT_S = 0.4
 
+# LM Studio 0.4+ 의 REST 모델 관리 엔드포인트. lms CLI 없이 HTTP 로 올리고 내린다.
+# 예전에는 `lms unload` 하나뿐이었는데 두 가지가 문제였다.
+#   1. lms 가 PATH 에 없으면 즉시 언로드가 통째로 안 된다(가장 흔한 설치 상태).
+#   2. lms 는 "이 PC 의" LM Studio 를 본다. base_url 이 다른 PC 를 가리키면
+#      엉뚱한(로컬) LM Studio 에서 모델을 내리거나 실패한다.
+# REST 를 먼저 쓰고, 엔드포인트가 없는 예전 LM Studio 에서만 lms 로 내려간다.
+LMS_REST_LOAD = "/api/v1/models/load"
+LMS_REST_UNLOAD = "/api/v1/models/unload"
+# 이 코드들은 "REST 로는 못 한다" 로 보고 lms 로 넘어간다.
+#   404/405 : 엔드포인트가 없는 예전 버전
+#   401/403 : API 키를 켜둔 LM Studio 에 토큰이 없음 -- lms 는 토큰이 필요 없다
+_REST_UNAVAILABLE = (401, 403, 404, 405)
+# 모델 관리 요청의 상한. 언로드는 금방 끝난다.
+UNLOAD_TIMEOUT_S = 30
+
 # 조회해도 안전한(= 즉시 거절당하는) 호스트.
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0")
 
@@ -70,6 +85,9 @@ class LMStudioBackend(BaseBackend):
         self.max_file_read_bytes = int(self.config.get("max_file_read_bytes", 262144) or 262144)
         self.default_ttl_sec = int(ls.get("ttl_sec", 0) or 0)
         self.default_unload_after = bool(ls.get("unload_after", False))
+        # 실제로 응답한 모델 id. generate() 를 한 번도 안 거친 인스턴스에서
+        # unload 를 불러도 AttributeError 가 나지 않게 미리 만들어 둔다.
+        self._served_model = ""
 
     # -- HTTP ---------------------------------------------------------------
 
@@ -85,6 +103,14 @@ class LMStudioBackend(BaseBackend):
 
         url = f"{self.base_url}/v1/chat/completions"
         return requests.post(url, headers=self._headers(), json=payload, timeout=timeout_s)
+
+    def _post_json(self, path: str, body, timeout_s: float):
+        """모델 관리용 POST. 예외는 호출부가 잡는다."""
+        import requests
+
+        return requests.post(
+            self.base_url + path, headers=self._headers(), json=body, timeout=timeout_s
+        )
 
     def _first_loaded_model(self, timeout_s: int) -> str:
         """/v1/models 에서 첫 번째 모델 id 를 얻는다 (모델 미지정 대비, DESIGN §5)."""
@@ -171,45 +197,126 @@ class LMStudioBackend(BaseBackend):
     # -- 메인 ---------------------------------------------------------------
 
     def generate(self, req: LLMRequest) -> LLMResponse:
-        """생성 후 요청에 따라 VRAM 에서 모델을 내린다."""
+        """(필요하면 모델을 올리고) 생성한 뒤, 요청에 따라 VRAM 에서 모델을 내린다.
+
+        언로드는 생성이 실패해도 한다 -- 타임아웃이나 Stop 으로 끝난 실행도
+        모델은 이미 VRAM 에 올라와 있다. 그걸 남겨두면 다음 이미지 모델이
+        VRAM 부족으로 죽는다.
+        """
         response = self._generate(req)
-        unload = (
-            self.default_unload_after if req.unload_after is None else req.unload_after
-        )
-        if unload:
-            note = self.unload_model(self._served_model or (req.model or "").strip())
+        if self.wants_unload(req):
+            note = self.unload_model(self._served_model or (req.model or "").strip()
+                                     or self.default_model)
             if note:
                 response.raw_debug = truncate_debug(
                     (response.raw_debug + "\n" + note).strip()
                 )
         return response
 
-    def unload_model(self, model_id: str) -> str:
-        """`lms unload` 로 모델을 VRAM 에서 즉시 내린다.
+    def wants_unload(self, req: LLMRequest) -> bool:
+        """요청이 정하지 않았으면(None) config 값을 따른다."""
+        return bool(
+            self.default_unload_after if req.unload_after is None else req.unload_after
+        )
 
-        lms CLI 가 없으면 조용히 실패하고 안내만 남긴다 — TTL 이 백업 역할을 한다.
-        반환값: debug 에 남길 안내 문구.
+    def prepare(self, timeout_s: int) -> str:
+        """생성 직전 훅. 반환값은 debug 에 남길 안내 문구.
+
+        LM Studio 는 요청이 오면 모델을 알아서 올리므로(JIT) 할 일이 없다.
+        vLLM 처럼 "재워둔" 서버를 깨워야 하는 백엔드가 덮어쓴다.
         """
-        from ..utils.proc import CliNotFoundError, resolve_cli, run_cli
+        return ""
 
+    def load_model(self, model_id: str, timeout_s: int) -> tuple:
+        """모델을 VRAM 에 올린다. 반환: (성공 여부, debug 안내 문구).
+
+        평소에는 부를 일이 없다 -- LM Studio 가 요청을 받으면 알아서 올린다(JIT).
+        JIT 를 꺼둔 설치에서 unload_after 로 모델을 내리면, 다음 실행은
+        "모델이 안 올라와 있다" 로 거절당한다. 그때 _run_loop 가 이걸 불러
+        같은 모델을 다시 올리고 재시도한다(예전에는 엉뚱한 모델로 바꿔 돌렸다).
+        """
+        if not model_id:
+            return False, ""
+        try:
+            resp = self._post_json(LMS_REST_LOAD, {"model": model_id}, timeout_s)
+            code, body = resp.status_code, resp.text or ""
+        except Exception as exc:
+            code, body = None, type(exc).__name__
+        if code == 200:
+            return True, f"load: '{model_id}' loaded into VRAM"
+        if code is not None and code not in _REST_UNAVAILABLE:
+            reason = server_error_reason(body) or f"HTTP {code}"
+            return False, f"load: LM Studio refused to load '{model_id}' - {reason}"
+        if not is_loopback(self.base_url):
+            return False, (
+                f"load: could not load '{model_id}' - this LM Studio has no REST load "
+                "(update to 0.4 or later), and the lms CLI would reach the LM Studio on "
+                "this PC, not the one at " + self.base_url
+            )
+        ok, detail = self._run_lms("load", model_id, timeout_s)
+        if ok:
+            return True, f"load: '{model_id}' loaded into VRAM (lms)"
+        return False, f"load: could not load '{model_id}' - {detail}"
+
+    def unload_model(self, model_id: str) -> str:
+        """모델을 VRAM 에서 즉시 내린다.
+
+        REST(/api/v1/models/unload)를 먼저 쓰고, 그게 없는 예전 LM Studio 에서만
+        `lms unload` 로 내려간다. 둘 다 안 되면 조용히 실패하고 안내만 남긴다 --
+        TTL 이 백업 역할을 한다. 반환값: debug 에 남길 안내 문구.
+        """
         if not model_id:
             return "unload: skipped, the target model is unknown (TTL will release it)"
 
         try:
+            resp = self._post_json(
+                LMS_REST_UNLOAD, {"instance_id": model_id}, UNLOAD_TIMEOUT_S
+            )
+            code, body = resp.status_code, resp.text or ""
+        except Exception as exc:
+            code, body = None, type(exc).__name__
+        if code == 200:
+            return f"unload: '{model_id}' unloaded from VRAM"
+        if code is not None and code not in _REST_UNAVAILABLE:
+            # 엔드포인트는 있는데 거절했다(대개 TTL 로 이미 내려간 모델).
+            # lms 로 다시 해도 같은 LM Studio 에 같은 걸 묻는 것이라 답이 같다.
+            reason = server_error_reason(body) or f"HTTP {code}"
+            return f"unload: LM Studio did not unload '{model_id}' - {reason}"
+
+        if not is_loopback(self.base_url):
+            # 여기서 lms 를 부르면 이 PC 의 LM Studio 를 건드린다. 사용자가 쓰는
+            # 서버는 다른 PC 에 있다.
+            return (
+                "unload: skipped - this LM Studio has no REST unload (update to 0.4 or "
+                "later), and the lms CLI would reach the LM Studio on this PC, not the "
+                f"one at {self.base_url}. (TTL still releases the model.)"
+            )
+
+        ok, detail = self._run_lms("unload", model_id, 60)
+        if ok:
+            return f"unload: '{model_id}' unloaded from VRAM"
+        return detail
+
+    def _run_lms(self, action: str, model_id: str, timeout_s: int) -> tuple:
+        """`lms load|unload <model>` 을 실행한다. 반환: (성공 여부, 안내 문구)."""
+        from ..utils.proc import CliNotFoundError, resolve_cli, run_cli
+
+        try:
             exe = resolve_cli("lms")
         except CliNotFoundError:
-            return (
-                "unload: the lms CLI was not found, so immediate unload is skipped. "
-                "Add LM Studio's lms to PATH, or set an absolute path in config.json "
-                "under cli_paths.lms. (TTL still releases the model.)"
+            return False, (
+                f"{action}: the lms CLI was not found and this LM Studio has no REST "
+                f"{action}, so it is skipped. Update LM Studio to 0.4 or later, add "
+                "LM Studio's lms to PATH, or set an absolute path in config.json under "
+                "cli_paths.lms. (TTL still releases the model.)"
             )
 
         code, _stdout, stderr, _dur = run_cli(
-            [exe, "unload", model_id], cwd=None, stdin_text=None, timeout_s=60
+            [exe, action, model_id], cwd=None, stdin_text=None, timeout_s=timeout_s
         )
         if code == 0:
-            return f"unload: '{model_id}' unloaded from VRAM"
-        return f"unload: failed (exit {code}) — {tail_lines(stderr, 3)}"
+            return True, ""
+        return False, f"{action}: failed (exit {code}) — {tail_lines(stderr, 3)}"
 
     def _generate(self, req: LLMRequest) -> LLMResponse:
         started = time.time()
@@ -244,6 +351,14 @@ class LMStudioBackend(BaseBackend):
             )
 
         model = (req.model or "").strip() or self.default_model
+
+        # 재워둔 서버를 깨우는 등, 생성 직전에 해야 할 일 (vLLM sleep 모드).
+        try:
+            prep_note = self.prepare(req.timeout_s)
+        except Exception as exc:  # 준비 단계 실패가 생성 전체를 막지는 않는다
+            prep_note = f"prepare: {type(exc).__name__}: {exc}"
+        if prep_note:
+            debug_notes.append(self._note(prep_note))
 
         # OpenAI 호환 chat/completions 에는 비디오 콘텐츠 타입이 없다.
         # → 프레임을 뽑아 이미지로 넣는다 (VLM 모델 필요).
@@ -430,14 +545,27 @@ class LMStudioBackend(BaseBackend):
 
             if resp.status_code != 200:
                 body = (resp.text or "")[:1000]
-                # 모델 미지정/오지정으로 실패하면 /v1/models 첫 모델로 한 번만 재시도한다.
+                # 모델 때문에 실패했으면 한 번만 복구를 시도한다.
+                #
+                # 모델을 지정했을 때는 절대 다른 모델로 바꾸지 않는다. 예전에는
+                # 지정 여부와 상관없이 /v1/models 의 첫 모델로 갈아탔다 -- 캡션용으로
+                # 고른 VLM 이 내려가 있으면 아무 텍스트 모델이 대신 답하고 status 는
+                # ok 였다. 지정한 모델은 올려서(load_model) 같은 모델로 재시도한다.
                 if not retried_with_model and _looks_like_model_error(resp.status_code, body):
-                    fallback = self._first_loaded_model(req.timeout_s)
-                    if fallback:
-                        retried_with_model = True
-                        model = fallback
-                        notes.append(self._note(f"no model given -> using '{fallback}' from /v1/models"))
-                        continue
+                    retried_with_model = True
+                    if model:
+                        loaded, load_note = self.load_model(model, req.timeout_s)
+                        if load_note:
+                            notes.append(self._note(load_note))
+                        if loaded:
+                            continue
+                    else:
+                        fallback = self._first_loaded_model(req.timeout_s)
+                        if fallback:
+                            model = fallback
+                            notes.append(self._note(
+                                f"no model given -> using '{fallback}' from /v1/models"))
+                            continue
                 # seed 는 OpenAI 규격 필드지만 모든 서버가 받는다는 보장은 없다
                 # (실기기로 확인하지 못했다, §0-1). 400 이면 시드만 빼고 한 번 더
                 # 해본다 -- 시드 하나 때문에 생성 전체가 실패하면 안 된다.

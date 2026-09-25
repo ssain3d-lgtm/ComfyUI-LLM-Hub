@@ -399,8 +399,12 @@ class TestNInfer(unittest.TestCase):
         self.assertNotIn("ollama", note.lower())
         self.assertNotIn("unloaded", note.lower())
 
-    def test_the_other_servers_keep_their_own_hint(self):
-        self.assertIn("ollama stop", backends.get_backend("llamacpp").unload_model("m"))
+    def test_an_unknown_server_keeps_the_hint(self):
+        """어느 서버인지 모르는 주소에는 관리 요청을 쏘지 않고 안내만 한다.
+        (ollama/llamacpp/vllm 의 실제 언로드는 test_unload_lifecycle.py)"""
+        impl = backends.get_backend("openai_compat")
+        impl.apply_base_url("http://127.0.0.1:1")
+        self.assertIn("ollama stop", impl.unload_model("m"))
 
     def test_a_dead_ninfer_is_reported_with_its_port_and_where_to_start_it(self):
         impl = backends.get_backend("ninfer")

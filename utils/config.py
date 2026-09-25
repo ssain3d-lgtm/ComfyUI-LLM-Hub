@@ -42,6 +42,10 @@ DEFAULTS = {
         "base_url": "http://127.0.0.1:11434",
         "api_token": "",
         "default_model": "",
+        # 생성 직후 서버에 언로드를 요청할지 (노드의 unload_after_generation 기본값).
+        # LM Studio 와 달리 기본은 끈다 -- 켜두면 설정한 적 없는 서버에 관리 요청이
+        # 나가고, 언로드 수단이 없는 서버(NInfer)는 매번 안내만 붙는다.
+        "unload_after": False,
     },
     "cli_paths": {"claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms"},
     "defaults": {

@@ -9,7 +9,8 @@
   "openai_compat": {
     "base_url": "http://127.0.0.1:11434",
     "api_token": "",
-    "default_model": ""
+    "default_model": "",
+    "unload_after": false
   },
   "cli_paths": {
     "claude": "claude",

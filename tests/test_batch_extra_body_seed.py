@@ -197,8 +197,11 @@ class TestBatchDoesNotThrashVram(unittest.TestCase):
         self.assertEqual(flags, [False, False, False])
 
     def test_other_backends_are_left_to_their_own_config(self):
-        """lmstudio_* 위젯은 LM Studio 전용이다. 다른 백엔드에 넘기면,
-        위젯 기본값 True 때문에 "언로드 없음" 안내가 매 실행마다 붙는다."""
+        """lmstudio_* 위젯은 LM Studio 전용이다. 다른 백엔드에 넘기면 화면에
+        보이지도 않는 위젯(기본값 True)이 동작을 바꾼다.
+
+        OpenAI 호환 서버는 자기 위젯(unload_after_generation, 기본 끔)을 보고,
+        CLI 3종은 언로드가 없으니 None(자기 설정)을 받는다."""
         seen = []
 
         class Spy:
@@ -207,7 +210,11 @@ class TestBatchDoesNotThrashVram(unittest.TestCase):
                 return base.LLMResponse(text="x", status="ok")
 
         run_node(Spy(), backend="llamacpp", lmstudio_unload_after=True)
-        self.assertEqual(seen, [None], "백엔드가 자기 설정을 따라야 한다")
+        run_node(Spy(), backend="llamacpp", lmstudio_unload_after=False,
+                 unload_after_generation=True)
+        run_node(Spy(), backend="claude", lmstudio_unload_after=True,
+                 unload_after_generation=True)
+        self.assertEqual(seen, [False, True, None])
 
 
 class TestToolLoopLimit(unittest.TestCase):
