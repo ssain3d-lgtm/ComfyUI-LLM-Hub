@@ -15,7 +15,7 @@ same node, switching between them without rewiring anything.
 - **File access**: let the model read files inside a folder you choose
 - **Image and video input**: multimodal prompts
 - **Live monitor on the node**: watch the text as it is generated (plain / markdown)
-- **Automatic VRAM release**: unload the LM Studio model right after the response, or after an idle timeout
+- **Automatic VRAM release**: load → generate → unload right away (LM Studio, Ollama, llama.cpp router, vLLM sleep mode), or after an idle timeout
 - **Always three outputs**: `text` / `status` / `debug` — the node never kills your workflow with an exception
 
 > **Only `requests` is added to pip.** Everything else uses the standard library or
@@ -150,7 +150,19 @@ server — see §7 *Cost*.
 **Differences from LM Studio:**
 
 - `ttl` is not sent. It is an LM Studio-specific field and stricter servers may return 400.
-- **There is no automatic VRAM release.** Use `ollama stop <model>`, or shut the vLLM / llama.cpp / NInfer server down.
+- **VRAM release is opt-in** with `unload_after_generation` (off by default): load the model, generate, then unload it
+  right away so the image model gets the VRAM back. How each server does it:
+
+  | Server | Unload | Loaded again by |
+  |---|---|---|
+  | Ollama | `POST /api/generate` with `keep_alive: 0` | Ollama itself, on the next request |
+  | llama.cpp | `POST /models/unload` — **router mode only**; a single-model `llama-server` has no unload | the router (autoload), or the node calls `POST /models/load` |
+  | vLLM | `POST /sleep?level=1` — needs `--enable-sleep-mode` and `VLLM_SERVER_DEV_MODE=1` | the node calls `POST /wake_up` before the next run |
+  | NInfer | none — stop the server | — |
+
+  `openai_compat` only does this when its address is one of the standard local ports above; for any other server it
+  sends nothing and writes a hint to `debug`. Whatever happened is always written to `debug`, and a failed unload never
+  turns a good answer into an error.
 - If your server needs an API key, set `openai_compat.api_token` in `config.json` or the `OPENAI_COMPAT_API_KEY` environment variable. **The LM Studio token is never reused** — sending your token to somebody else's server would be a leak.
 
 #### NInfer
@@ -195,6 +207,7 @@ real machine (Qwen3.8-27B NVFP4 on an RTX 5090, 2026-09). What is different abou
 | `server_model` | Model dropdown for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer`, read from whichever of those servers is running **on this machine**. `(auto)` falls back to the `model` field |
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
+| `unload_after_generation` | Same for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer`: load → generate → unload right away (off by default). See §2-1 |
 | `openai_base_url` | Server address. Only needed when the server is **not** on its standard port (`openai_compat` and its `ollama`/`vllm`/`llamacpp`/`ninfer` presets) |
 | `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
 | `seed` | Busts ComfyUI's cache so the same prompt runs again. On `lmstudio` / `openai_compat` a **non-zero** value is also sent to the server as the sampling seed; `0` sends nothing. The three CLIs have no seed flag |
@@ -462,10 +475,17 @@ your browser** to populate the list. With `(auto)`, the model is chosen from the
 
 **VRAM release** — two mechanisms work together.
 
-1. `lmstudio_unload_after` (on by default) — runs `lms unload <model>` right after the
-   response for an **immediate** release. LM Studio's `lms` CLI must be on your PATH;
-   if it is missing this is skipped and the reason is written to `debug` (generation
-   still succeeds).
+1. `lmstudio_unload_after` (on by default) — unloads the model right after the response
+   for an **immediate** release, even when the run failed or was stopped. It uses LM Studio's
+   REST API (`/api/v1/models/unload`, LM Studio 0.4+) and only falls back to `lms unload <model>`
+   on older versions. `lms` is never used for an LM Studio on another PC — it would unload
+   the one on this PC instead. If neither works the reason is written to `debug` (generation
+   still succeeds). In a `one_per_image` batch the model is unloaded once, after the last image
+   (or when you press Stop).
+
+   The model you picked is loaded again on the next run. If LM Studio's JIT loading is off,
+   the node loads it itself (`/api/v1/models/load`, or `lms load`) — it never swaps in a
+   different model.
 2. `lmstudio_ttl_sec` (default 300) — sends a `ttl` with the request so LM Studio unloads
    the model itself after that many seconds without a request. This is the safety net for
    when `lms` is unavailable. `0` means don't send it (LM Studio's own 60-minute default applies).
@@ -490,7 +510,8 @@ never committed to git.)
   "openai_compat": {
     "base_url": "http://127.0.0.1:11434",
     "api_token": "",
-    "default_model": ""
+    "default_model": "",
+    "unload_after": false
   },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
@@ -511,7 +532,8 @@ never committed to git.)
   - `replace` — replaces the built-in prompt entirely. Use it **when you need style or language instructions to stick.**
     In `append` mode the built-in prompt is strong enough to dilute instructions like "answer in English only" — measured, not guessed.
 - `lmstudio.ttl_sec` / `lmstudio.unload_after`: these become the **widget defaults** on the node. Per-run widget values take priority.
-- `cli_paths.lms`: path to the LM Studio CLI, used for immediate VRAM release.
+- `openai_compat.unload_after` (default `false`): the default of `unload_after_generation`.
+- `cli_paths.lms`: path to the LM Studio CLI. Only needed for LM Studio older than 0.4, which has no REST unload.
 - `allow_unsafe_extra_args` (default `false`): whether `extra_args` may contain flags that unlock the read-only sandbox (`--dangerously-*`, `--allowedTools Bash`, `-s danger-full-access`, `--yolo`, …). **Blocked by default.** Only set it to `true` if you genuinely need it.
 - Secrets such as `api_token` are never included in `debug` output.
 
@@ -548,7 +570,7 @@ Paste this report into any bug report — it answers most of the first round of 
 | `unsupported: temperature` in `debug` | Expected. The CLI backends do not expose that parameter |
 | ffmpeg notice after adding a video | Install ffmpeg and add it to your PATH (§5) |
 | Monitor window does not appear | Hard-refresh the browser (`Ctrl+Shift+R`) so the JS extension reloads, then open the console (F12) and look for `[LLM Hub] v… monitor extension loaded`. **No such line means the JS never loaded** — check the self-check page above. Also check whether `stream_view` is `off`, which hides the panel on purpose |
-| `the lms CLI was not found` in `debug` | Add LM Studio's `lms` to your PATH or set `cli_paths.lms` in `config.json`. Without it, TTL still handles the unload |
+| `the lms CLI was not found` in `debug` | Your LM Studio is older than 0.4 (no REST unload). Update it, or add `lms` to your PATH / set `cli_paths.lms` in `config.json`. Without it, TTL still handles the unload |
 | `lmstudio_model` dropdown is empty | Start LM Studio, then **refresh the browser** |
 
 ### Speed
@@ -592,7 +614,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > or Ollama running, the tests talk to your real server and widget defaults differ
 > per machine.
 
-**477 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**498 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -656,7 +678,7 @@ ComfyUI에서 LLM 백엔드를 드롭다운으로 골라 텍스트를 생성하�
 - **파일 접근**: 지정한 폴더 안의 파일을 LLM이 읽고 답할 수 있음
 - **이미지 · 비디오 입력**: 멀티모달 프롬프트 지원
 - **실시간 모니터링 창**: 생성 중인 텍스트를 노드 안에서 바로 확인 (plain / markdown)
-- **VRAM 자동 해제**: LM Studio 모델을 응답 직후 또는 유휴 시간 뒤 내림
+- **VRAM 자동 해제**: 올리기 → 생성 → 즉시 내리기 (LM Studio, Ollama, llama.cpp 라우터, vLLM sleep 모드), 또는 유휴 시간 뒤 내림
 - **항상 3개 출력**: `text` / `status` / `debug` — 노드가 예외로 워크플로우를 죽이지 않음
 
 ---
@@ -781,7 +803,18 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 **LM Studio 와 다른 점:**
 
 - `ttl` 을 보내지 않습니다. LM Studio 전용 필드라 다른 서버는 400 을 낼 수 있습니다
-- **VRAM 자동 해제가 없습니다.** Ollama 는 `ollama stop <모델>`, vLLM·llama.cpp·NInfer 는 서버를 내려야 합니다
+- **VRAM 해제는 `unload_after_generation` 으로 켭니다**(기본 꺼짐). 모델을 올려 생성한 뒤 곧바로 내려서 이미지 모델이 VRAM 을
+  돌려받게 합니다. 서버별 방법:
+
+  | 서버 | 언로드 | 다시 올리는 쪽 |
+  |---|---|---|
+  | Ollama | `POST /api/generate` + `keep_alive: 0` | 다음 요청 때 Ollama 가 알아서 |
+  | llama.cpp | `POST /models/unload` — **라우터 모드에서만**. 모델 하나만 띄운 `llama-server` 에는 언로드가 없습니다 | 라우터 자동 적재, 또는 노드가 `POST /models/load` |
+  | vLLM | `POST /sleep?level=1` — `--enable-sleep-mode` 와 `VLLM_SERVER_DEV_MODE=1` 필요 | 다음 실행 전에 노드가 `POST /wake_up` |
+  | NInfer | 없음 — 서버를 중지하세요 | — |
+
+  `openai_compat` 은 주소가 위의 표준 로컬 포트일 때만 이렇게 합니다. 다른 서버에는 아무 요청도 보내지 않고 `debug` 에 안내만
+  남깁니다. 무슨 일이 있었는지는 늘 `debug` 에 적히고, 언로드가 실패해도 정상 응답을 오류로 바꾸지 않습니다.
 - API 키가 필요하면 `config.json` 의 `openai_compat.api_token` 이나 환경변수 `OPENAI_COMPAT_API_KEY` 를 쓰세요. **LM Studio 토큰은 재사용하지 않습니다** (남의 서버에 토큰이 새면 안 되니까요)
 
 #### NInfer
@@ -826,6 +859,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 | `server_model` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` 용 모델 드롭다운. **이 컴퓨터에** 떠 있는 서버에서 읽어옵니다. `(auto)`면 `model` 칸을 따름 |
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
+| `unload_after_generation` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` 용: 올리기 → 생성 → 즉시 내리기 (기본 꺼짐). §2-1 참고 |
 | `openai_base_url` | 서버 주소. 표준 포트가 **아닐 때만** 채우면 됩니다 (`openai_compat` 과 `ollama`/`vllm`/`llamacpp`/`ninfer` 프리셋용) |
 | `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
 | `seed` | ComfyUI 캐시를 무효화해 같은 프롬프트를 다시 돌리게 합니다. `lmstudio` / `openai_compat` 에서는 **0이 아닌 값**이면 샘플링 시드로 서버에도 함께 보냅니다(0이면 안 보냅니다). CLI 3종에는 시드 플래그가 없습니다 |
@@ -1094,8 +1128,13 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
 
 **VRAM 해제** — 두 가지가 함께 걸려 있습니다.
 
-1. `lmstudio_unload_after` (기본 켜짐) — 응답 직후 `lms unload <모델>`로 **즉시** 내립니다.
-   LM Studio의 `lms` CLI가 PATH에 있어야 합니다. 없으면 건너뛰고 `debug`에 이유를 남깁니다(생성은 정상).
+1. `lmstudio_unload_after` (기본 켜짐) — 응답 직후 **즉시** 내립니다. 실행이 실패하거나 Stop 으로 끝나도 내립니다.
+   LM Studio REST API(`/api/v1/models/unload`, 0.4 이상)를 쓰고, 예전 버전에서만 `lms unload <모델>`로 내려갑니다.
+   다른 PC 의 LM Studio 에는 `lms` 를 쓰지 않습니다 — 이 PC 의 LM Studio 를 건드리게 되기 때문입니다.
+   둘 다 안 되면 건너뛰고 `debug`에 이유를 남깁니다(생성은 정상). `one_per_image` 배치는 마지막 장 뒤(또는 Stop 시) 한 번만 내립니다.
+
+   고른 모델은 다음 실행 때 다시 올라옵니다. LM Studio 의 JIT 로딩을 꺼뒀다면 노드가 직접 올립니다
+   (`/api/v1/models/load` 또는 `lms load`) — 다른 모델로 바꿔 돌리지 않습니다.
 2. `lmstudio_ttl_sec` (기본 300초) — 요청에 `ttl`을 실어 보내, 그 시간 동안 요청이 없으면 LM Studio가 알아서 내립니다.
    `lms`가 없을 때의 안전망입니다. `0`이면 보내지 않습니다(LM Studio 기본값 60분 적용).
 
@@ -1119,7 +1158,8 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
   "openai_compat": {
     "base_url": "http://127.0.0.1:11434",
     "api_token": "",
-    "default_model": ""
+    "default_model": "",
+    "unload_after": false
   },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
@@ -1140,7 +1180,8 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
   - `replace` — 기본 프롬프트를 통째로 바꿉니다. **문체·언어 지시를 강하게 먹이고 싶을 때** 쓰세요.
     `append` 모드에서는 기본 프롬프트가 강해서 "영어로만 답해" 같은 지시가 희석되는 것을 실측으로 확인했습니다.
 - `lmstudio.ttl_sec` / `lmstudio.unload_after`: **노드 위젯의 기본값**이 됩니다. 개별 실행은 위젯 값이 우선합니다.
-- `cli_paths.lms`: LM Studio CLI 경로. 즉시 VRAM 해제에 씁니다.
+- `openai_compat.unload_after`(기본 `false`): `unload_after_generation` 위젯의 기본값입니다.
+- `cli_paths.lms`: LM Studio CLI 경로. REST 언로드가 없는 0.4 미만 LM Studio 에서만 필요합니다.
 - `allow_unsafe_extra_args`(기본 `false`): `extra_args`로 읽기 전용 잠금을 푸는 위험 플래그(`--dangerously-*`, `--allowedTools Bash`, `-s danger-full-access`, `--yolo` 등)를 허용할지. **기본은 차단**입니다. 꼭 필요할 때만 `true`로 여세요.
 - `api_token` 같은 비밀값은 `debug` 출력에 절대 포함되지 않습니다.
 
@@ -1179,7 +1220,7 @@ LM Studio가 응답하는지, 프론트엔드 JS가 ComfyUI가 서빙할 위치�
 | `debug`에 `unsupported: temperature` | 정상입니다. CLI 백엔드는 해당 파라미터를 노출하지 않습니다 |
 | 비디오를 넣었는데 `ffmpeg` 안내가 뜸 | ffmpeg을 설치하고 PATH에 추가하세요 (§5) |
 | 모니터링 창이 안 보임 | 브라우저를 **하드 새로고침**(`Ctrl+Shift+R`)한 뒤 F12 콘솔에 `[LLM Hub] v… monitor extension loaded` 줄이 있는지 보세요. **그 줄이 없으면 JS가 아예 로드되지 않은 것**이니 위 자가 진단 페이지를 확인하세요. `stream_view`가 `off`면 의도적으로 숨긴 것입니다 |
-| `debug`에 `the lms CLI was not found` | LM Studio 설치 폴더의 `lms`를 PATH에 넣거나 `config.json`의 `cli_paths.lms`에 절대경로를 지정하세요. 없어도 TTL로는 해제됩니다 |
+| `debug`에 `the lms CLI was not found` | LM Studio 가 0.4 미만입니다(REST 언로드 없음). 업데이트하거나, `lms`를 PATH에 넣거나 `config.json`의 `cli_paths.lms`에 절대경로를 지정하세요. 없어도 TTL로는 해제됩니다 |
 | `lmstudio_model` 드롭다운이 비어 있음 | LM Studio를 켠 뒤 **브라우저를 새로고침**하세요 |
 
 ### 속도
@@ -1223,7 +1264,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > `127.0.0.1` 의 1234 / 11434 / 8000 / 8080 을 두드려서, LM Studio 나 Ollama 를
 > 켜두셨다면 테스트가 실제 서버로 요청을 보내고 위젯 기본값도 머신마다 달라집니다.
 
-**477종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**498종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 

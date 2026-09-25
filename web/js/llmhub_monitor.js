@@ -434,6 +434,8 @@ const BACKEND_ONLY = {
   server_model: ["openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   lmstudio_ttl_sec: ["lmstudio"],
   lmstudio_unload_after: ["lmstudio"],
+  // lmstudio_unload_after 의 OpenAI 호환 서버판. LM Studio 에는 자기 위젯이 있다.
+  unload_after_generation: ["openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   temperature: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   max_tokens: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   mcp_config: ["claude"],
@@ -455,7 +457,7 @@ const ADVANCED = [
   "model", "file_access", "workspace_dir", "temperature", "max_tokens",
   "timeout_sec", "seed", "video_max_frames", "stream_view", "video_path",
   "mcp_config", "extra_args", "lmstudio_ttl_sec", "lmstudio_unload_after",
-  "batch_mode", "extra_body", "system_prompt",
+  "unload_after_generation", "batch_mode", "extra_body", "system_prompt",
   // INPUT_TYPES 에 없는 이름이다. seed 에 control_after_generate:True 를 주면
   // 프론트엔드가 짝꿍 위젯을 하나 더 만들어 붙인다. seed 만 숨기면 이게 홀로 남아
   // "고급을 접었는데 웬 randomize 줄이 남아 있는" 모양이 된다.

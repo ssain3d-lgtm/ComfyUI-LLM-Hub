@@ -104,7 +104,8 @@
         "(none)",
         "all_in_one",
         "",
-        "(auto)"
+        "(auto)",
+        false
       ]
     }
   ],

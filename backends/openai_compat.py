@@ -13,9 +13,15 @@ LM Studio 백엔드를 그대로 물려받아 base_url 만 바꾼다 -- 검증�
 LM Studio 전용이라 갈라야 하는 것은 셋뿐이다.
 
   ttl 필드   : LM Studio 전용이다. 모르는 필드에 엄격한 서버는 400 을 낼 수
-               있으므로 여기서는 보내지 않는다. Ollama 는 keep_alive 라는
-               자기 필드를 쓰는데, 확인 못 한 것을 넣지 않는다(§0-5 와 같은 이유).
-  lms unload : LM Studio CLI 다. 다른 서버에는 없으므로 안내만 남긴다.
+               있으므로 여기서는 보내지 않는다.
+  언로드     : 서버마다 수단이 다르다 (unload_after_generation 위젯).
+                 Ollama    POST /api/generate {"model", "keep_alive": 0}
+                 llama.cpp POST /models/unload {"model"}  (라우터 모드에서만)
+                 vLLM      POST /sleep?level=1  (--enable-sleep-mode + VLLM_SERVER_DEV_MODE=1)
+                           → 다음 실행 전에 prepare() 가 /wake_up 으로 깨운다
+                 NInfer    수단이 없다. 그렇다고 말만 한다.
+               어느 서버인지 모르는 openai_compat(표준 포트가 아닌 주소)은
+               아무것도 쏘지 않고 안내만 남긴다 -- 남의 서버에 추측으로 요청하지 않는다.
   /api/v0/models : LM Studio 전용 확장이다. 모델은 노드의 model 칸에 직접 적는다.
 
 주의: Ollama / vLLM / llama.cpp 는 실기기 검증을 하지 못했다. LM Studio 로 검증된 코드 경로를
@@ -35,11 +41,11 @@ NInfer 만 실기기로 확인했다 (2026-09-19~21, ninfer-serve, Qwen3.8-27B N
 
 from __future__ import annotations
 
+import os
 import time
 
-import os
-from .base import LLMRequest, LLMResponse, truncate_debug
-from .lmstudio import LMStudioBackend, is_loopback
+from .base import LLMRequest, LLMResponse, server_error_reason, truncate_debug
+from .lmstudio import UNLOAD_TIMEOUT_S, LMStudioBackend, is_loopback
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"  # Ollama 기본 포트
 
@@ -79,9 +85,11 @@ class OpenAICompatBackend(LMStudioBackend):
             or ""
         ).strip()
         self.default_model = section.get("default_model") or ""
-        # ttl / unload 는 이 백엔드에 없다. 부모가 읽어둔 LM Studio 값을 지운다.
+        # ttl 은 이 백엔드에 없다. 부모가 읽어둔 LM Studio 값을 지운다.
         self.default_ttl_sec = 0
-        self.default_unload_after = False
+        # 언로드 기본값은 이 백엔드 섹션 것만 본다. LM Studio 의 unload_after
+        # (기본 True)를 물려받으면 설정한 적도 없는 서버에 언로드가 나간다.
+        self.default_unload_after = bool(section.get("unload_after", False))
 
     def apply_base_url(self, base_url: str) -> None:
         """노드에서 넘어온 주소로 갈아탄다. 빈 값이면 설정값을 유지한다.
@@ -111,8 +119,69 @@ class OpenAICompatBackend(LMStudioBackend):
         payload.pop("ttl", None)
         return payload
 
+    def server_kind(self) -> str:
+        """어느 서버인지. 언로드 수단을 고르는 데 쓴다. 모르면 빈 문자열.
+
+        별칭(ollama/vllm/llamacpp/ninfer)은 이름이 곧 답이다. openai_compat 은
+        주소가 이 PC 의 표준 포트일 때만 그 서버로 본다 -- 추측으로 남의 서버에
+        관리 요청을 보내지 않는다.
+        """
+        if self.name in KNOWN_SERVERS:
+            return self.name
+        if not is_loopback(self.base_url):
+            return ""
+        try:
+            from urllib.parse import urlparse
+
+            port = urlparse(self.base_url).port
+        except Exception:
+            return ""
+        for kind, url in KNOWN_SERVERS.items():
+            if port is not None and urlparse(url).port == port:
+                return kind
+        return ""
+
+    def prepare(self, timeout_s: int) -> str:
+        """vLLM 이 재워져 있으면(이전 실행의 언로드) 깨운다.
+
+        sleep 모드가 꺼진 vLLM 은 /is_sleeping 이 404 라 아무 일도 하지 않는다.
+        """
+        if self.server_kind() != "vllm":
+            return ""
+        import requests
+
+        try:
+            resp = requests.get(
+                self.base_url + "/is_sleeping", headers=self._headers(),
+                timeout=min(timeout_s, UNLOAD_TIMEOUT_S),
+            )
+            if resp.status_code != 200 or not (resp.json() or {}).get("is_sleeping"):
+                return ""
+            woke = self._post_json("/wake_up", None, timeout_s)
+        except Exception:
+            # 서버가 꺼져 있으면 이어지는 생성 요청이 제대로 된 연결 오류를 낸다.
+            return ""
+        if woke.status_code == 200:
+            return "load: vLLM woken up from sleep (weights back in VRAM)"
+        reason = server_error_reason(woke.text or "") or f"HTTP {woke.status_code}"
+        return f"load: vLLM is asleep and /wake_up failed - {reason}"
+
+    def load_model(self, model_id: str, timeout_s: int) -> tuple:
+        """llama.cpp 라우터만 명시적으로 올린다. 나머지는 요청이 오면 서버가 올린다."""
+        if not model_id or self.server_kind() != "llamacpp":
+            return False, ""
+        try:
+            resp = self._post_json("/models/load", {"model": model_id}, timeout_s)
+        except Exception as exc:
+            return False, f"load: could not reach /models/load - {type(exc).__name__}"
+        if resp.status_code == 200:
+            return True, f"load: '{model_id}' loaded into VRAM"
+        reason = server_error_reason(resp.text or "") or f"HTTP {resp.status_code}"
+        return False, f"load: llama.cpp did not load '{model_id}' - {reason}"
+
     def unload_model(self, model_id: str) -> str:
-        if self.name == "ninfer":
+        kind = self.server_kind()
+        if kind == "ninfer":
             # 이 노드의 unload 는 "생성 후 VRAM 비우기" 다. NInfer 에는 그 수단이 아예 없다 -- 언로드 API 도,
             # 유휴 언로드도 없고 GPU 상주가 프로세스 시작 때 고정된다. 다른 서버용 안내(`ollama stop`)를
             # 그대로 내면 틀린 안내이고, 내렸다고 하면 거짓말이다.
@@ -121,10 +190,50 @@ class OpenAICompatBackend(LMStudioBackend):
                 "unload API and no idle unload. To free the VRAM, stop the server (the Stop button of "
                 "the NInfer config UI, or end the ninfer-serve process)."
             )
+        if kind == "ollama":
+            return self._unload_request(
+                "/api/generate", {"model": model_id, "keep_alive": 0}, model_id,
+                "Ollama",
+            )
+        if kind == "llamacpp":
+            return self._unload_request(
+                "/models/unload", {"model": model_id}, model_id, "llama.cpp",
+                missing_hint=(
+                    "this llama-server runs a single model (not router mode), so it has "
+                    "no unload - stop the server to free the VRAM"
+                ),
+            )
+        if kind == "vllm":
+            return self._unload_request(
+                "/sleep?level=1", None, "", "vLLM",
+                done=(
+                    "unload: vLLM put to sleep - weights moved out of VRAM; the next run "
+                    "wakes it up automatically"
+                ),
+                missing_hint=(
+                    "start vLLM with --enable-sleep-mode and the environment variable "
+                    "VLLM_SERVER_DEV_MODE=1 to allow it, or stop the server to free the VRAM"
+                ),
+            )
         return (
             "unload: this backend has no immediate unload. "
             "Use `ollama stop <model>`, or shut down the vLLM / llama.cpp server."
         )
+
+    def _unload_request(self, path, body, model_id, label, done="", missing_hint=""):
+        """언로드 요청 하나를 보내고 결과를 debug 한 줄로 돌려준다."""
+        if body is not None and not model_id:
+            return "unload: skipped, the target model is unknown"
+        try:
+            resp = self._post_json(path, body, UNLOAD_TIMEOUT_S)
+        except Exception as exc:
+            return f"unload: {label} did not answer ({type(exc).__name__})"
+        if resp.status_code == 200:
+            return done or f"unload: '{model_id}' unloaded from VRAM"
+        if resp.status_code in (404, 405) and missing_hint:
+            return f"unload: {label} has no unload endpoint - {missing_hint}"
+        reason = server_error_reason(resp.text or "") or f"HTTP {resp.status_code}"
+        return f"unload: {label} did not unload - {reason}"
 
     def _map_exception(self, exc: Exception, started: float, debug_notes: list) -> LLMResponse:
         import requests
