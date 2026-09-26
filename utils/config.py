@@ -47,6 +47,22 @@ DEFAULTS = {
         # 나가고, 언로드 수단이 없는 서버(NInfer)는 매번 안내만 붙는다.
         "unload_after": False,
     },
+    # ninfer 백엔드 전용. NInfer 에는 모델을 올리고 내리는 API 가 없어서 NInfer 설정 UI
+    # (https://github.com/ssain3d-lgtm/NInfer-lgtm)로 서버 프로세스를 켜고 끈다.
+    "ninfer": {
+        # 설정 UI 주소. 이 PC(loopback)여야 한다.
+        "config_ui_url": "http://127.0.0.1:8093",
+        # 설정 UI 가 꺼져 있을 때 노드가 대신 띄울 server.py 경로. 비우면 띄우지 않는다.
+        "config_ui_script": "",
+        # 모델을 안 골랐고 서버도 꺼져 있을 때 띄울 .ninfer 이름. 비우면 직전 모델, 그것도 없으면 목록의 첫 모델.
+        "default_artifact": "",
+        # 실행 버튼을 누르면 서버를 자동으로 띄운다. 끄면 예전처럼 떠 있는 서버만 쓴다.
+        "auto_start": True,
+        # 설정 UI 가 관리하는 NInfer 포트. 노드 주소가 이 포트가 아니면 관리하지 않는다.
+        "port": 8081,
+        # 기동 대기 상한(초). 모델이 느린 디스크에 있으면 늘린다.
+        "start_timeout_s": 600,
+    },
     "cli_paths": {"claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms"},
     "defaults": {
         # 실측(2026-08-12, gemini-cli 0.55.1): "gemini-3-flash" 는 CLI 가

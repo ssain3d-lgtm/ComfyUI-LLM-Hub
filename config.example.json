@@ -12,6 +12,14 @@
     "default_model": "",
     "unload_after": false
   },
+  "ninfer": {
+    "config_ui_url": "http://127.0.0.1:8093",
+    "config_ui_script": "",
+    "default_artifact": "",
+    "auto_start": true,
+    "port": 8081,
+    "start_timeout_s": 600
+  },
   "cli_paths": {
     "claude": "claude",
     "codex": "codex",

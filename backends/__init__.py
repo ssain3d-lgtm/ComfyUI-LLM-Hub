@@ -12,6 +12,8 @@ from .base import BaseBackend, LLMRequest, LLMResponse
 # 먼저 알아야 했는데, 드롭다운 어디에도 llama.cpp 라는 글자가 없었다.
 #
 # ninfer 는 NInfer(`ninfer-serve`)다. 다른 셋과 달리 실기기로 확인했다 -- backends/openai_compat.py 참고.
+# NInfer 에는 모델 올리기/내리기 API 가 없어서, ninfer 만은 NInfer 설정 UI 를 통해 서버 프로세스 자체를
+# 켜고 끄는 하위 클래스(backends/ninfer.py)를 쓴다.
 OPENAI_COMPAT_ALIASES = ("ollama", "vllm", "llamacpp", "ninfer")
 
 # 새 이름은 반드시 "맨 뒤에만" 붙인다. 저장된 워크플로우가 콤보를 어떻게 들고
@@ -40,6 +42,10 @@ def get_backend(name: str) -> BaseBackend:
         from .codex import CodexBackend
 
         return CodexBackend()
+    if key == "ninfer":
+        from .ninfer import NInferBackend
+
+        return NInferBackend()
     if key == "openai_compat" or key in OPENAI_COMPAT_ALIASES:
         from .openai_compat import KNOWN_SERVERS, OpenAICompatBackend
 

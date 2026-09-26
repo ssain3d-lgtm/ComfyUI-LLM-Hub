@@ -339,7 +339,9 @@ class LLMHubGenerate:
                                "Start the server, then press the refresh button on the title "
                                "bar. (auto) = follow the model field above. Only local "
                                "servers are listed — for a remote or paid endpoint, type the "
-                               "name into model instead."}),
+                               "name into model instead. ninfer: the .ninfer models of the "
+                               "NInfer config UI are listed even while the server is off — "
+                               "pick one and Run starts NInfer with it."}),
                 # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
                 #
                 # lmstudio_unload_after 의 OpenAI 호환 서버판. 이름을 따로 둔 이유:
@@ -353,7 +355,9 @@ class LLMHubGenerate:
                                "Ollama: keep_alive 0. llama.cpp: router mode only "
                                "(/models/unload). vLLM: sleep mode (needs --enable-sleep-mode "
                                "and VLLM_SERVER_DEV_MODE=1; woken up before the next run). "
-                               "NInfer has no unload. What happened is written to debug."}),
+                               "NInfer: the server is started on Run and stopped after the "
+                               "answer (through the NInfer config UI). What happened is "
+                               "written to debug."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},

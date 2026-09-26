@@ -185,10 +185,13 @@ class OpenAICompatBackend(LMStudioBackend):
             # 이 노드의 unload 는 "생성 후 VRAM 비우기" 다. NInfer 에는 그 수단이 아예 없다 -- 언로드 API 도,
             # 유휴 언로드도 없고 GPU 상주가 프로세스 시작 때 고정된다. 다른 서버용 안내(`ollama stop`)를
             # 그대로 내면 틀린 안내이고, 내렸다고 하면 거짓말이다.
+            # ninfer 백엔드(backends/ninfer.py)는 설정 UI 로 서버를 내린다. 여기 오는 것은 그 관리 밖의
+            # 주소(다른 포트·다른 PC)이거나 openai_compat 으로 8081 을 쓰는 경우다.
             return (
                 "unload: NInfer keeps the model in VRAM for as long as its process lives - there is no "
                 "unload API and no idle unload. To free the VRAM, stop the server (the Stop button of "
-                "the NInfer config UI, or end the ninfer-serve process)."
+                "the NInfer config UI, or end the ninfer-serve process). The ninfer backend on the "
+                "standard port does this for you through the config UI."
             )
         if kind == "ollama":
             return self._unload_request(
@@ -329,6 +332,14 @@ def list_server_models(timeout_s: float = 1.5) -> list:
             for model_id in _probe(base, timeout_s, headers):
                 if model_id not in ids:
                     ids.append(model_id)
+
+        # NInfer 는 꺼져 있어도 고를 수 있어야 한다 -- ninfer 백엔드가 고른 .ninfer 를 띄운다.
+        # 목록은 NInfer 설정 UI 의 모델 폴더에서 온다(backends/ninfer.py).
+        from .ninfer import list_artifacts
+
+        for name in list_artifacts(timeout_s):
+            if name not in ids:
+                ids.append(name)
     except Exception:
         ids = []
 
