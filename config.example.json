@@ -18,7 +18,8 @@
     "default_artifact": "",
     "auto_start": true,
     "port": 8081,
-    "start_timeout_s": 600
+    "start_timeout_s": 600,
+    "free_comfy_vram": true
   },
   "cli_paths": {
     "claude": "claude",

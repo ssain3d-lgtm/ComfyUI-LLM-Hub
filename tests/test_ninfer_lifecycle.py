@@ -25,7 +25,11 @@ _PACK_NAME = os.path.basename(_PACK_ROOT)
 base = importlib.import_module(f"{_PACK_NAME}.backends.base")
 backends = importlib.import_module(f"{_PACK_NAME}.backends")
 ninfer_mod = importlib.import_module(f"{_PACK_NAME}.backends.ninfer")
+nodes_mod = importlib.import_module(f"{_PACK_NAME}.nodes")
 LLMRequest = base.LLMRequest
+
+sys.path.insert(0, os.path.join(_PACK_ROOT, "tests"))
+from test_batch_extra_body_seed import run_node  # noqa: E402
 
 A = "qwen_a.ninfer"
 B = "qwen_b.ninfer"
@@ -40,9 +44,13 @@ class FakeNInfer:
     """
 
     def __init__(self, status="stopped", running="", preflight=None, start_polls=1,
-                 fail_start=False):
+                 fail_start=False, context=220000, understands_options=True):
         self.status = status
         self.running = running
+        # 떠 있는 서버의 --max-context. understands_options=False 는 "options" 를 모르는 예전 설정 UI.
+        self.context = context
+        self.profile_context = 220000
+        self.understands_options = understands_options
         self.preflight = preflight
         self.start_polls = start_polls
         self.fail_start = fail_start
@@ -64,7 +72,8 @@ class FakeNInfer:
                 status = self.status = "failed" if self.fail_start else "running"
         return {
             "status": status, "port": 8081,
-            "run": {"artifact": self.running} if self.running else None,
+            "run": ({"artifact": self.running, "args": ["--max-context", str(self.context)]}
+                    if self.running else None),
             "progress": {"stage": "loading_weights", "load_percent": 50.0,
                          "failure_line": "CUDA out of memory" if status == "failed" else None},
             "log_tail": ["boom"],
@@ -82,7 +91,12 @@ class FakeNInfer:
             if self.preflight and not (body or {}).get("force"):
                 return 409, {"error": "preflight", "preflight": self.preflight}
             self.status, self.running, self._pending = "starting", body["artifact"], self.start_polls
-            return 200, {"ok": True}
+            options = (body.get("options") or {}) if self.understands_options else {}
+            self.context = options.get("max-context", self.profile_context)
+            run = {"artifact": self.running}
+            if options:
+                run["overrides"] = options
+            return 200, {"ok": True, "run": run}
         if path == "/api/stop":
             if self.status in ("stopped", "failed"):
                 return 200, {"ok": True, "code": "already_stopped"}
@@ -172,8 +186,8 @@ class FakeNInfer:
         return impl
 
 
-def _req(model="", unload=False):
-    return LLMRequest("ninfer", model, "", "hi", unload_after=unload, timeout_s=5)
+def _req(model="", unload=False, context=0):
+    return LLMRequest("ninfer", model, "", "hi", unload_after=unload, timeout_s=5, ninfer_context=context)
 
 
 class TestAutoStart(unittest.TestCase):
@@ -323,6 +337,148 @@ class TestUnmanaged(unittest.TestCase):
     def test_the_suite_never_reaches_the_real_config_ui(self):
         """tests/__init__.py 가 설정 UI 주소를 죽은 포트로 돌려 둔다."""
         self.assertEqual(backends.get_backend("ninfer").config_ui_url, "http://127.0.0.1:1")
+
+
+class TestContext(unittest.TestCase):
+    """ninfer_context: 그 컨텍스트로 띄운다. 이번 기동에만 쓰고 프로필은 건드리지 않는다."""
+
+    def test_a_start_carries_the_context(self):
+        with FakeNInfer() as srv:
+            resp = srv.backend().generate(_req(A, context=30000))
+        self.assertEqual(resp.status, "ok", resp.raw_debug)
+        self.assertEqual(srv.api_posts(), [("/api/start", {
+            "artifact": A, "options": {"max-context": 30000, "kv-capacity": 30000}})])
+        self.assertIn("context 30000 for this start", resp.raw_debug)
+
+    def test_a_different_running_context_is_restarted(self):
+        with FakeNInfer(status="running", running=A, context=220000) as srv:
+            resp = srv.backend().generate(_req(A, context=30000))
+        self.assertEqual(resp.status, "ok", resp.raw_debug)
+        self.assertEqual([p for p, _ in srv.api_posts()], ["/api/stop", "/api/start"])
+        self.assertIn("to change the context 220000 -> 30000", resp.raw_debug)
+        self.assertEqual(srv.context, 30000)
+
+    def test_auto_model_keeps_the_running_model_when_only_the_context_changes(self):
+        with FakeNInfer(status="running", running=B, context=220000) as srv:
+            srv.backend().generate(_req("", context=30000))
+        self.assertEqual(srv.api_posts()[-1][1]["artifact"], B)
+
+    def test_the_same_context_is_left_alone(self):
+        with FakeNInfer(status="running", running=A, context=30000) as srv:
+            srv.backend().generate(_req(A, context=30000))
+        self.assertEqual(srv.api_posts(), [])
+
+    def test_zero_uses_whatever_is_running(self):
+        with FakeNInfer(status="running", running=A, context=30000) as srv:
+            srv.backend().generate(_req(A, context=0))
+        self.assertEqual(srv.api_posts(), [])
+
+    def test_zero_starts_with_the_profile(self):
+        with FakeNInfer() as srv:
+            srv.backend().generate(_req(A, context=0))
+        self.assertEqual(srv.api_posts(), [("/api/start", {"artifact": A})])
+
+    def test_an_old_config_ui_that_ignores_options_is_reported(self):
+        with FakeNInfer(understands_options=False) as srv:
+            resp = srv.backend().generate(_req(A, context=30000))
+        self.assertEqual(resp.status, "ok")
+        self.assertIn("does not take a per-start context", resp.raw_debug)
+
+    def test_an_unmanaged_address_says_the_context_was_ignored(self):
+        with FakeNInfer(status="running", running=A) as srv:
+            resp = srv.backend(port=1).generate(_req(PUBLIC_ID, context=30000))
+        self.assertEqual(srv.api_posts(), [])
+        self.assertIn("ninfer_context is ignored", resp.raw_debug)
+
+
+class TestFreeComfyBeforeStart(unittest.TestCase):
+    def test_comfy_models_are_unloaded_before_a_start(self):
+        with FakeNInfer() as srv:
+            resp = srv.backend().generate(_req(A))
+        self.assertEqual(srv.freed, 1)
+        self.assertIn("before starting", resp.raw_debug)
+
+    def test_not_when_nothing_is_started(self):
+        with FakeNInfer(status="running", running=A) as srv:
+            srv.backend().generate(_req(A))
+        self.assertEqual(srv.freed, 0)
+
+    def test_it_can_be_turned_off(self):
+        with FakeNInfer() as srv:
+            srv.backend(free_comfy_vram=False).generate(_req(A))
+        self.assertEqual(srv.freed, 0)
+
+
+class TestReasoning(unittest.TestCase):
+    """reasoning: 요청마다 thinking 을 정한다. 실측(2026-09-26)으로 확인한 필드만 보낸다."""
+
+    def _chat(self, reasoning="", extra_body=None):
+        with FakeNInfer(status="running", running=A) as srv:
+            req = _req(A)
+            req.reasoning = reasoning
+            req.extra_body = extra_body or {}
+            resp = srv.backend().generate(req)
+        body = [b for p, b in srv.posts() if p == "/v1/chat/completions"][0]
+        return body, resp
+
+    def test_off_sends_reasoning_effort_none(self):
+        body, resp = self._chat("off")
+        self.assertEqual(body["reasoning_effort"], "none")
+        self.assertIn("reasoning=off", resp.raw_debug)
+
+    def test_on_uses_the_template_kwarg(self):
+        body, _ = self._chat("on")
+        self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": True})
+        self.assertNotIn("reasoning_effort", body)
+
+    def test_a_level_is_passed_through(self):
+        body, _ = self._chat("high")
+        self.assertEqual(body["reasoning_effort"], "high")
+
+    def test_default_sends_nothing(self):
+        body, _ = self._chat("")
+        self.assertNotIn("reasoning_effort", body)
+        self.assertNotIn("chat_template_kwargs", body)
+
+    def test_extra_body_wins(self):
+        """둘이 어긋나면 NInfer 가 conflicting_template_option 400 을 낸다. 사용자가 적은 쪽을 따른다."""
+        body, resp = self._chat("off", {"chat_template_kwargs": {"enable_thinking": True}})
+        self.assertNotIn("reasoning_effort", body)
+        self.assertIn("extra_body already sets it", resp.raw_debug)
+
+    def test_on_keeps_other_template_kwargs_from_extra_body(self):
+        body, _ = self._chat("on", {"chat_template_kwargs": {"preserve_thinking": False}})
+        self.assertEqual(body["chat_template_kwargs"], {"preserve_thinking": False, "enable_thinking": True})
+
+
+class TestNodeInputs(unittest.TestCase):
+    """노드의 ninfer_context / reasoning 은 ninfer 에만 넘어간다."""
+
+    def _run(self, backend, **kwargs):
+        seen = []
+
+        class Spy:
+            def generate(self, req):
+                seen.append(req)
+                return base.LLMResponse(text="x", status="ok")
+
+        run_node(Spy(), backend=backend, **kwargs)
+        return seen[0]
+
+    def test_ninfer_gets_both(self):
+        req = self._run("ninfer", ninfer_context=30000, reasoning="off")
+        self.assertEqual((req.ninfer_context, req.reasoning), (30000, "off"))
+
+    def test_the_default_choice_means_nothing_sent(self):
+        req = self._run("ninfer", reasoning=nodes_mod.REASONING_DEFAULT)
+        self.assertEqual(req.reasoning, "")
+
+    def test_other_backends_get_neither(self):
+        req = self._run("llamacpp", ninfer_context=30000, reasoning="off")
+        self.assertEqual((req.ninfer_context, req.reasoning), (0, ""))
+
+    def test_widgets_are_appended_at_the_end(self):
+        self.assertEqual(nodes_mod.WIDGET_ORDER[-2:], ["ninfer_context", "reasoning"])
 
 
 if __name__ == "__main__":

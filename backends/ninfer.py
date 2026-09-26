@@ -20,9 +20,25 @@ NInfer(`ninfer-serve`)에는 모델을 올리고 내리는 API 가 없다. 모�
      그래서 기동 후 /v1/models 에서 읽은 ID 로 바꿔서 보낸다.
   3. unload_after_generation 이 켜져 있으면 생성 뒤 /api/stop 으로 서버를 내려 VRAM 을 돌려준다.
 
-VRAM 사전 점검(preflight)에 걸리면 ComfyUI 가 캐시해 둔 모델을 먼저 내리고 한 번 더 시도한다.
-그래도 모자라면(blocked) 띄우지 않고 이유를 status 로 말한다. 들어가긴 하지만 빠듯한 경우(warn)는
-force 로 띄우고 debug 에 적는다 -- 사용자가 실행 버튼을 눌렀다는 것 자체가 띄우라는 뜻이다.
+띄우기 전에 ComfyUI 가 캐시해 둔 모델을 VRAM 에서 내린다(ninfer.free_comfy_vram, 기본 켬).
+설정 UI 의 사전 점검(preflight)은 "모델 파일 + 2.5 GiB" 만 보는데, 컨텍스트 220K 면 KV 등 런타임만
+8.38 GiB 라 점검을 통과하고도 VRAM 이 모자란다. 실측(2026-09-26): ComfyUI 가 21.6 GiB 를 쥔 채로
+NInfer 가 떠서 여유 221 MiB, 디코드 평균 66 tok/s. 비운 뒤에는 108~131 tok/s.
+그래도 사전 점검에 걸리면(blocked) 띄우지 않고 이유를 status 로 말한다. 빠듯한 경우(warn)는 force 로
+띄우고 debug 에 적는다 -- 사용자가 실행 버튼을 눌렀다는 것 자체가 띄우라는 뜻이다.
+
+노드의 ninfer_context 가 0 이 아니면 그 컨텍스트로 띄운다(/api/start 의 "options" 로 max-context 와
+kv-capacity 를 이번 기동에만 넘긴다 -- 설정 UI 에 저장된 프로필은 그대로다). 떠 있는 서버의 컨텍스트가
+다르면 내리고 다시 띄운다. 0 이면 떠 있는 것을 그대로 쓰고, 새로 띄울 때는 프로필 값을 쓴다.
+실측: 30000 이면 런타임 2.18 GiB(220K 는 8.38 GiB), 기동 직후 여유 5.95 GiB.
+입력 + max_tokens 가 컨텍스트를 넘어도 NInfer 는 거절하지 않고 남은 칸만큼만 출력한다(실측).
+
+노드의 reasoning 은 요청마다 thinking 을 정한다(서버 기동과 무관). NInfer serving.md 와 실측 기준:
+  off             -> reasoning_effort: "none"
+  on              -> chat_template_kwargs.enable_thinking: true
+  low/medium/high -> reasoning_effort: 그 값 (템플릿이 해석한다)
+extra_body 에 사용자가 직접 적은 reasoning_effort / enable_thinking 이 있으면 그쪽이 이긴다
+(둘이 어긋나면 NInfer 가 conflicting_template_option 400 을 낸다).
 
 관리는 "이 PC 의 NInfer 포트(기본 8081)" 를 쓸 때만 한다. 노드의 openai_base_url 로 다른 주소를
 적었다면 그건 설정 UI 가 관리하는 서버가 아니므로 예전처럼 OpenAI 호환 서버로만 다룬다.
@@ -66,6 +82,15 @@ _LAST_ARTIFACT = {"name": ""}
 
 _GIB = 1024 ** 3
 
+# 노드의 reasoning 드롭다운 값 -> 요청 필드. "" 는 서버 기본값(= 아무것도 안 보냄).
+REASONING_FIELDS = {
+    "off": {"reasoning_effort": "none"},
+    "on": {"chat_template_kwargs": {"enable_thinking": True}},
+    "low": {"reasoning_effort": "low"},
+    "medium": {"reasoning_effort": "medium"},
+    "high": {"reasoning_effort": "high"},
+}
+
 
 class NInferBackend(OpenAICompatBackend):
     name = "ninfer"
@@ -83,6 +108,7 @@ class NInferBackend(OpenAICompatBackend):
         self.auto_start = bool(section.get("auto_start", True))
         self.port = int(section.get("port") or DEFAULT_PORT)
         self.start_timeout_s = int(section.get("start_timeout_s") or DEFAULT_START_TIMEOUT_S)
+        self.free_comfy_before_start = bool(section.get("free_comfy_vram", True))
 
     # -- 관리 대상인가 --------------------------------------------------------
 
@@ -178,11 +204,34 @@ class NInferBackend(OpenAICompatBackend):
 
     # -- 생성 -----------------------------------------------------------------
 
+    def _build_payload(self, req: LLMRequest, messages: list, model: str) -> dict:
+        payload = super()._build_payload(req, messages, model)
+        fields = REASONING_FIELDS.get(req.reasoning or "")
+        if fields and not _extra_body_sets_reasoning(req.extra_body):
+            for key, value in fields.items():
+                if isinstance(value, dict):
+                    payload[key] = dict(payload.get(key) or {}, **value)
+                else:
+                    payload[key] = value
+        return payload
+
     def _generate(self, req: LLMRequest) -> LLMResponse:
-        if not self.managed():
-            return super()._generate(req)
-        started = time.time()
         notes: list = []
+        if req.reasoning in REASONING_FIELDS:
+            if _extra_body_sets_reasoning(req.extra_body):
+                notes.append(f"ninfer: reasoning={req.reasoning} not applied - extra_body already sets it")
+            else:
+                notes.append(f"ninfer: reasoning={req.reasoning}")
+        if not self.managed():
+            if req.ninfer_context:
+                notes.append(
+                    "ninfer: ninfer_context is ignored - this address is not the NInfer the config UI manages"
+                )
+            response = super()._generate(req)
+            if notes:
+                response.raw_debug = truncate_debug("\n".join(notes + [response.raw_debug]).strip())
+            return response
+        started = time.time()
         error, model_id = self._ensure_running(req, notes)
         if error:
             return LLMResponse(
@@ -201,6 +250,7 @@ class NInferBackend(OpenAICompatBackend):
         """서버가 원하는 artifact 로 떠 있게 만든다. 반환: (오류 status 또는 "", 공개 모델 ID)."""
         choice = (req.model or "").strip()
         wanted = choice if choice.lower().endswith(ARTIFACT_SUFFIX) else ""
+        context = max(0, int(req.ninfer_context or 0))
 
         state = self._state()
         if state is None:
@@ -231,15 +281,24 @@ class NInferBackend(OpenAICompatBackend):
             )
             return "", self._public_id()
 
-        if status in ("running", "starting") and running and wanted and running != wanted:
-            emit(req, f"ninfer: switching {running} -> {wanted}...")
+        # 다른 모델이거나, 컨텍스트를 정했는데 떠 있는 서버의 컨텍스트가 다르면 내리고 다시 띄운다.
+        reason = ""
+        if status in ("running", "starting") and running:
+            current = _running_context(state)
+            if wanted and running != wanted:
+                reason = f"to switch to '{wanted}'"
+            elif context and current and current != context:
+                reason = f"to change the context {current} -> {context}"
+        if reason:
+            emit(req, f"ninfer: restarting {reason}...")
             code, data = self._ui("POST", "/api/stop", {}, STOP_TIMEOUT_S)
             if code != 200:
                 return (
-                    f"error: ninfer - could not stop '{running}' to switch to '{wanted}' - "
+                    f"error: ninfer - could not stop '{running}' {reason} - "
                     f"{data.get('code') or data.get('error') or code}"
                 ), ""
-            notes.append(f"ninfer: stopped '{running}' to switch to '{wanted}'")
+            notes.append(f"ninfer: stopped '{running}' {reason}")
+            wanted = wanted or running
             status = "stopped"
 
         if status in ("running", "starting"):
@@ -264,22 +323,36 @@ class NInferBackend(OpenAICompatBackend):
                 f"ninfer: no model chosen -> starting '{artifact}' (pick one in server_model, "
                 "or set ninfer.default_artifact in config.json)"
             )
-        error = self._start(req, artifact, notes)
+        error = self._start(req, artifact, notes, context)
         if error:
             return error, ""
         return "", self._public_id()
 
-    def _start(self, req: LLMRequest, artifact: str, notes: list) -> str:
-        emit(req, f"ninfer: starting {artifact}...")
+    def _start(self, req: LLMRequest, artifact: str, notes: list, context: int = 0) -> str:
+        emit(req, f"ninfer: starting {artifact}" + (f" (context {context})" if context else "") + "...")
         started = time.time()
         freed = False
         force = False
+        if self.free_comfy_before_start and free_comfy_vram():
+            freed = True
+            notes.append("ninfer: unloaded ComfyUI's cached models before starting (they load again when needed)")
         while True:
             body = {"artifact": artifact}
+            if context:
+                # 이번 기동에만 쓴다. 설정 UI 의 프로필은 그대로다.
+                body["options"] = {"max-context": context, "kv-capacity": context}
             if force:
                 body["force"] = True
             code, data = self._ui("POST", "/api/start", body, START_TIMEOUT_S)
             if code == 200:
+                if context and not (data.get("run") or {}).get("overrides"):
+                    # 예전 설정 UI 는 "options" 를 모르고 무시한다 -- 프로필 컨텍스트로 떴다.
+                    notes.append(
+                        "ninfer: this NInfer config UI does not take a per-start context, so the profile's "
+                        "context was used - update the config UI (NInfer-lgtm)"
+                    )
+                elif context:
+                    notes.append(f"ninfer: context {context} for this start")
                 break
             error = data.get("error") or ""
             if code == 409 and error == "already_running":
@@ -298,6 +371,8 @@ class NInferBackend(OpenAICompatBackend):
                     )
                     continue
                 return f"error: ninfer - not enough free VRAM to start '{artifact}' ({_vram_line(verdict)})"
+            if code == 400 and error == "bad_options":
+                return f"error: ninfer - the config UI refused the start options - {data.get('message') or error}"
             if code is None:
                 return f"error: ninfer - the config UI ({self.config_ui_url}) stopped answering"
             reason = data.get("message") or error or f"HTTP {code}"
@@ -381,6 +456,30 @@ def free_comfy_vram() -> bool:
         return True
     except Exception:
         return False
+
+
+def _extra_body_sets_reasoning(extra_body) -> bool:
+    """사용자가 extra_body 로 thinking 을 직접 정했는가. 그러면 노드의 reasoning 은 물러난다."""
+    if not isinstance(extra_body, dict):
+        return False
+    kwargs = extra_body.get("chat_template_kwargs")
+    return (
+        "reasoning_effort" in extra_body
+        or "enable_thinking" in extra_body
+        or (isinstance(kwargs, dict) and "enable_thinking" in kwargs)
+    )
+
+
+def _running_context(state: dict) -> int:
+    """떠 있는 서버의 --max-context. 모르면 0."""
+    args = ((state.get("run") or {}).get("args")) or []
+    for index, part in enumerate(args[:-1]):
+        if part == "--max-context":
+            try:
+                return int(args[index + 1])
+            except (TypeError, ValueError):
+                return 0
+    return 0
 
 
 def _gib(value) -> str:

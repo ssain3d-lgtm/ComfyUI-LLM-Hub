@@ -442,6 +442,9 @@ const BACKEND_ONLY = {
   video_max_frames: ["lmstudio", "claude", "codex", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
   // extra_body 는 HTTP payload 에 합치는 물건이라 CLI 3종에는 합칠 자리가 없다.
   extra_body: ["lmstudio", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
+  // NInfer 만: 기동 컨텍스트와 요청별 thinking.
+  ninfer_context: ["ninfer"],
+  reasoning: ["ninfer"],
 };
 
 // 접었을 때 숨는 위젯. 여기 없는 것 = 항상 보이는 것이다:

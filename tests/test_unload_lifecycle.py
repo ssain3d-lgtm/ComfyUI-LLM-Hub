@@ -387,7 +387,9 @@ class TestBatchStopStillUnloads(unittest.TestCase):
 
 class TestWidget(unittest.TestCase):
     def test_it_is_appended_last(self):
-        self.assertEqual(nodes_mod.WIDGET_ORDER[-1], "unload_after_generation")
+        # 그 뒤로 ninfer 전용 두 위젯(ninfer_context, reasoning)이 더 붙었다.
+        order = nodes_mod.WIDGET_ORDER
+        self.assertEqual(order[order.index("server_model") + 1], "unload_after_generation")
         spec = nodes_mod.LLMHubGenerate.INPUT_TYPES()["optional"]["unload_after_generation"]
         self.assertEqual(spec[0], "BOOLEAN")
         self.assertIs(spec[1]["default"], False)
