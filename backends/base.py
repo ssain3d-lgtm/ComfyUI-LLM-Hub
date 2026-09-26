@@ -46,6 +46,11 @@ class LLMRequest:
     extra_args: str = ""
     # openai_compat 전용: 노드에서 넘긴 서버 주소(비면 config 값을 쓴다)
     base_url_override: str = ""
+    # ninfer 전용. 0 = 떠 있는 서버 그대로(새로 띄우면 설정 UI 프로필 값).
+    # 0 이 아니면 그 컨텍스트(max-context = kv-capacity)로 띄운다.
+    ninfer_context: int = 0
+    # ninfer 전용. "" = 서버 기본값, off / on / low / medium / high.
+    reasoning: str = ""
     # 실시간 모니터링용 StreamEmitter (없으면 스트리밍하지 않는다)
     emitter: object = None
 

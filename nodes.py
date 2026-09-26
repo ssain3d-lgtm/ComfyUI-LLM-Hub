@@ -39,7 +39,7 @@ WIDGET_ORDER = [
     "video_path", "mcp_config", "extra_args",
     "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
     "openai_base_url", "system_preset", "batch_mode", "extra_body", "server_model",
-    "unload_after_generation",
+    "unload_after_generation", "ninfer_context", "reasoning",
 ]
 
 # 릴리스별로 "그때 배포된 순서" 를 그대로 박아둔 원장.
@@ -88,6 +88,10 @@ FROZEN_WIDGET_ORDERS = (
         "openai_base_url", "system_preset", "batch_mode", "extra_body", "server_model",
     ),
 )
+
+# reasoning 드롭다운. 첫 칸이 기본값이다(= 아무것도 안 보냄).
+REASONING_DEFAULT = "(default)"
+REASONING_CHOICES = [REASONING_DEFAULT, "off", "on", "low", "medium", "high"]
 
 # server_model 드롭다운을 쓰는 백엔드 = openai_compat 과 그 별칭들.
 OPENAI_COMPAT_BACKENDS = ("openai_compat",) + tuple(OPENAI_COMPAT_ALIASES)
@@ -358,6 +362,23 @@ class LLMHubGenerate:
                                "NInfer: the server is started on Run and stopped after the "
                                "answer (through the NInfer config UI). What happened is "
                                "written to debug."}),
+                # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
+                #
+                # ninfer 전용 둘. NInfer 는 컨텍스트가 기동 때 정해지므로 노드가 그 값으로 띄운다.
+                "ninfer_context": ("INT", {
+                    "default": 0, "min": 0, "max": 1048576, "step": 1,
+                    "tooltip": "[ninfer] Context length to start NInfer with (max-context and "
+                               "kv-capacity), for this start only — the config UI profile is not "
+                               "changed. A smaller context leaves more VRAM free: 30000 uses "
+                               "2.2 GiB instead of 8.4 GiB at 220000. If NInfer is running with a "
+                               "different context it is restarted. 0 = use whatever is running, "
+                               "or the profile's value when starting."}),
+                "reasoning": (REASONING_CHOICES, {
+                    "tooltip": "[ninfer] Thinking for this request. off = no reasoning (fastest; "
+                               "sends reasoning_effort none). on = reasoning on. low / medium / "
+                               "high = reasoning_effort for the model's template. (default) = "
+                               "the server's default (on for Qwen3.8). A reasoning_effort or "
+                               "enable_thinking you put in extra_body wins over this."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -414,6 +435,8 @@ class LLMHubGenerate:
         batch_mode=BATCH_ALL,
         extra_body="",
         unload_after_generation=False,
+        ninfer_context=0,
+        reasoning=REASONING_DEFAULT,
         unique_id=None,
     ):
         # 노드는 어떤 경우에도 예외를 밖으로 던지지 않는다 (DESIGN N4, §5-3).
@@ -589,6 +612,14 @@ class LLMHubGenerate:
                     extra_args=_as_text(extra_args),
                     extra_body=extra_body_dict,
                     base_url_override=_as_text(openai_base_url),
+                    # ninfer 전용 둘. 다른 백엔드에는 넘기지 않는다(화면에도 안 보인다).
+                    ninfer_context=(
+                        max(0, _as_number(ninfer_context, 0)) if backend == "ninfer" else 0
+                    ),
+                    reasoning=(
+                        _as_text(reasoning) if backend == "ninfer"
+                        and _as_text(reasoning) in REASONING_CHOICES[1:] else ""
+                    ),
                     # lmstudio_ttl_sec 도 LM Studio 전용이다(위의 unload_wanted
                     # 주석 참고). None 을 주면 각 백엔드가 자기 설정을 따른다.
                     ttl_sec=(

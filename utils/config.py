@@ -62,6 +62,8 @@ DEFAULTS = {
         "port": 8081,
         # 기동 대기 상한(초). 모델이 느린 디스크에 있으면 늘린다.
         "start_timeout_s": 600,
+        # 띄우기 전에 ComfyUI 가 캐시해 둔 모델을 VRAM 에서 내린다. 끄면 사전 점검에 걸릴 때만 내린다.
+        "free_comfy_vram": True,
     },
     "cli_paths": {"claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms"},
     "defaults": {

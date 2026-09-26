@@ -105,7 +105,9 @@
         "all_in_one",
         "",
         "(auto)",
-        false
+        false,
+        0,
+        "(default)"
       ]
     }
   ],

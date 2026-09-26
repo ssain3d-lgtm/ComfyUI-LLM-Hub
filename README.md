@@ -187,12 +187,26 @@ real machine (Qwen3.8-27B NVFP4 on an RTX 5090, 2026-09). What is different abou
   the config UI's `server.py` and the node starts it (without a window) when it is not. This only happens on the standard
   local port (`ninfer.port`, 8081) — an address typed into `openai_base_url` is used as a plain server and never started
   or stopped. `ninfer.auto_start: false` turns all of this off.
+
+  Before a start the node unloads ComfyUI's cached models (`ninfer.free_comfy_vram`, on by default). The config UI's VRAM
+  check only counts the model file plus 2.5 GiB, but at a 220K context the KV cache and runtime take another 8.4 GiB, so
+  NInfer could start next to a ComfyUI that still held 21.6 GiB and run squeezed: 221 MiB free, 66 tok/s on average.
+  With ComfyUI's models unloaded first it decoded at 108–131 tok/s (measured 2026-09-26, RTX 5090).
+- **`ninfer_context` sets the context NInfer starts with** (`max-context` and `kv-capacity`), for that start only — the
+  config UI profile is not changed. `0` keeps whatever is running, and a fresh start uses the profile. When NInfer is
+  already running with a different context, the node restarts it. A smaller context frees VRAM: 30000 took 2.18 GiB of
+  runtime and left 5.95 GiB free, where 220000 took 8.38 GiB and left 0.2 GiB. If the prompt plus `max_tokens` is longer
+  than the context, NInfer does not refuse the request; it stops the answer when the context is full. This needs a
+  config UI that accepts start options — an older one ignores them, starts with the profile, and the node says so in `debug`.
 - **The `model` sent to NInfer must be the server's public ID.** NInfer rejects any other name. The `ninfer` backend
   reads it from `/v1/models` after the start, so picking a `.ninfer` file is enough.
 - **Thinking is on by default**, and the hidden reasoning counts against `max_tokens`. With the default 2048 a
   reasoning model can spend the whole budget before it answers (the node reports that as
-  *"reasoning tokens used up the whole max_tokens budget"*). Either raise `max_tokens`, or switch thinking off by
-  putting `{"reasoning_effort": "none"}` in `extra_body`. A `/no_think` line in the prompt does **nothing** on NInfer —
+  *"reasoning tokens used up the whole max_tokens budget"*). Set **`reasoning`** on the node: `off` sends
+  `reasoning_effort: "none"` (the fastest — one run spent 10,201 output tokens mostly on reasoning), `on` sends
+  `chat_template_kwargs.enable_thinking: true`, and `low` / `medium` / `high` pass that `reasoning_effort` to the model's
+  template. `(default)` sends nothing. A `reasoning_effort` or `enable_thinking` you put in `extra_body` wins over the
+  widget (the two must not disagree — NInfer returns 400 `conflicting_template_option`). A `/no_think` line in the prompt does **nothing** on NInfer —
   the model just reads it as text — and neither does a top-level `enable_thinking`.
 - **There is no unload API and no idle unload** — the model stays in VRAM for as long as the process lives. That is
   why the `ninfer` backend stops the process instead (above). Through `openai_compat` or a non-standard address there is
@@ -226,6 +240,8 @@ real machine (Qwen3.8-27B NVFP4 on an RTX 5090, 2026-09). What is different abou
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
 | `unload_after_generation` | Same for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer`: load → generate → unload right away (off by default; on `ninfer` it stops the server). See §2-1 |
+| `ninfer_context` | `ninfer` only: context NInfer starts with (`max-context` and `kv-capacity`), this start only. `0` = what is running / the profile. See [NInfer](#ninfer) |
+| `reasoning` | `ninfer` only: thinking for this request — `(default)` / `off` / `on` / `low` / `medium` / `high`. See [NInfer](#ninfer) |
 | `openai_base_url` | Server address. Only needed when the server is **not** on its standard port (`openai_compat` and its `ollama`/`vllm`/`llamacpp`/`ninfer` presets) |
 | `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
 | `seed` | Busts ComfyUI's cache so the same prompt runs again. On `lmstudio` / `openai_compat` a **non-zero** value is also sent to the server as the sampling seed; `0` sends nothing. The three CLIs have no seed flag |
@@ -537,7 +553,8 @@ never committed to git.)
     "default_artifact": "",
     "auto_start": true,
     "port": 8081,
-    "start_timeout_s": 600
+    "start_timeout_s": 600,
+    "free_comfy_vram": true
   },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
@@ -640,7 +657,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > or Ollama running, the tests talk to your real server and widget defaults differ
 > per machine.
 
-**518 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**539 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -863,11 +880,23 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
   목록의 첫 모델을 띄웁니다. 설정 UI 는 떠 있어야 합니다. `config.json` 의 `ninfer.config_ui_script` 에 설정 UI 의 `server.py` 경로를
   적어 두면 꺼져 있을 때 노드가 (창 없이) 띄웁니다. 이 관리는 표준 로컬 포트(`ninfer.port`, 8081)에서만 합니다 — `openai_base_url` 에
   적은 주소는 그냥 서버로 쓰고 켜거나 끄지 않습니다. `ninfer.auto_start: false` 면 전부 끕니다.
+
+  띄우기 전에 ComfyUI 가 캐시해 둔 모델을 VRAM 에서 내립니다(`ninfer.free_comfy_vram`, 기본 켬). 설정 UI 의 VRAM 점검은 모델 파일 +
+  2.5 GiB 만 보는데, 컨텍스트 220K 에서는 KV 캐시와 런타임이 8.4 GiB 를 더 씁니다. 그래서 ComfyUI 가 21.6 GiB 를 쥔 채로 NInfer 가
+  떠서 여유 221 MiB, 평균 66 tok/s 로 돌았습니다. ComfyUI 모델을 먼저 내리면 108~131 tok/s 였습니다(2026-09-26 실측, RTX 5090).
+- **`ninfer_context` 로 NInfer 를 띄울 컨텍스트를 정합니다**(`max-context` 와 `kv-capacity`). 그 기동에만 쓰고 설정 UI 프로필은
+  바꾸지 않습니다. `0` 이면 떠 있는 것을 그대로 쓰고, 새로 띄울 때는 프로필 값을 씁니다. 이미 다른 컨텍스트로 떠 있으면 노드가 다시
+  띄웁니다. 컨텍스트를 줄이면 VRAM 이 남습니다: 30000 은 런타임 2.18 GiB 에 여유 5.95 GiB, 220000 은 8.38 GiB 에 여유 0.2 GiB 였습니다.
+  입력 + `max_tokens` 가 컨텍스트보다 길어도 NInfer 는 거절하지 않고, 컨텍스트가 차면 답을 멈춥니다. 기동 옵션을 받는 설정 UI 가
+  필요합니다 — 예전 설정 UI 는 옵션을 무시하고 프로필 값으로 띄우며, 노드가 그렇다고 `debug` 에 적습니다.
 - **NInfer 로 보내는 `model` 은 서버의 공개 ID 여야 합니다.** 다른 이름은 NInfer 가 거절합니다. `ninfer` 백엔드는 기동 후
   `/v1/models` 에서 그 ID 를 읽어 보내므로 `.ninfer` 파일을 고르기만 하면 됩니다.
 - **thinking 이 기본으로 켜져 있고**, 보이지 않는 추론도 `max_tokens` 에 포함됩니다. 기본값 2048 이면 추론 모델이 답하기 전에
   예산을 다 쓸 수 있습니다(노드는 이걸 *"reasoning tokens used up the whole max_tokens budget"* 로 알려줍니다).
-  `max_tokens` 를 올리거나, `extra_body` 에 `{"reasoning_effort": "none"}` 을 넣어 thinking 을 끄세요. 프롬프트에 `/no_think` 를
+  노드의 **`reasoning`** 으로 정하세요: `off` 는 `reasoning_effort: "none"` 을 보냅니다(가장 빠릅니다 — 출력 10,201 토큰의 대부분을
+  추론에 쓴 실행이 있었습니다). `on` 은 `chat_template_kwargs.enable_thinking: true`, `low` / `medium` / `high` 는 그 `reasoning_effort` 를
+  모델 템플릿에 넘깁니다. `(default)` 는 아무것도 보내지 않습니다. `extra_body` 에 직접 적은 `reasoning_effort` 나 `enable_thinking` 이
+  있으면 그쪽이 이깁니다(둘이 어긋나면 NInfer 가 400 `conflicting_template_option` 을 냅니다). 프롬프트에 `/no_think` 를
   적는 것은 NInfer 에서 **효과가 없습니다** — 모델이 글자로 읽을 뿐입니다. top-level `enable_thinking` 도 듣지 않습니다.
 - **언로드 API 도, 유휴 언로드도 없습니다** — 프로세스가 사는 동안 모델이 VRAM 에 상주합니다. 그래서 `ninfer` 백엔드는 대신
   프로세스를 중지합니다(위). `openai_compat` 이나 표준이 아닌 주소로 쓰면 여기서 중지할 수단이 없고, `unload_after_generation` 은
@@ -902,6 +931,8 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
 | `unload_after_generation` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` 용: 올리기 → 생성 → 즉시 내리기 (기본 꺼짐. `ninfer` 는 서버를 중지). §2-1 참고 |
+| `ninfer_context` | `ninfer` 전용: NInfer 를 띄울 컨텍스트(`max-context`·`kv-capacity`), 그 기동에만. `0` = 떠 있는 것 / 프로필 값. [NInfer](#ninfer-1) 참고 |
+| `reasoning` | `ninfer` 전용: 이 요청의 thinking — `(default)` / `off` / `on` / `low` / `medium` / `high`. [NInfer](#ninfer-1) 참고 |
 | `openai_base_url` | 서버 주소. 표준 포트가 **아닐 때만** 채우면 됩니다 (`openai_compat` 과 `ollama`/`vllm`/`llamacpp`/`ninfer` 프리셋용) |
 | `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
 | `seed` | ComfyUI 캐시를 무효화해 같은 프롬프트를 다시 돌리게 합니다. `lmstudio` / `openai_compat` 에서는 **0이 아닌 값**이면 샘플링 시드로 서버에도 함께 보냅니다(0이면 안 보냅니다). CLI 3종에는 시드 플래그가 없습니다 |
@@ -1209,7 +1240,8 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
     "default_artifact": "",
     "auto_start": true,
     "port": 8081,
-    "start_timeout_s": 600
+    "start_timeout_s": 600,
+    "free_comfy_vram": true
   },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
@@ -1314,7 +1346,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > `127.0.0.1` 의 1234 / 11434 / 8000 / 8080 을 두드려서, LM Studio 나 Ollama 를
 > 켜두셨다면 테스트가 실제 서버로 요청을 보내고 위젯 기본값도 머신마다 달라집니다.
 
-**518종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**539종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 
