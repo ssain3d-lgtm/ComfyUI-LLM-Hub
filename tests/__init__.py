@@ -19,3 +19,7 @@ CI 워크플로에도 같은 변수를 넣어 둔다 -- pytest 로 돌리는 등
 import os
 
 os.environ.setdefault("LLMHUB_SKIP_MODEL_PROBE", "1")
+# ninfer 백엔드는 NInfer 설정 UI 에 /api/start · /api/stop 을 보낸다. 개발 PC 에서 테스트가
+# 진짜 서버를 끄거나 켜면 안 되므로 설정 UI 주소를 죽은 포트로 돌려 둔다.
+# 관리 흐름을 검증하는 테스트는 가짜 설정 UI 를 직접 넘긴다(test_ninfer_lifecycle.py).
+os.environ.setdefault("LLMHUB_NINFER_CONFIG_UI_URL", "http://127.0.0.1:1")

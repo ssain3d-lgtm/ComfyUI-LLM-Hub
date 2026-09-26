@@ -103,7 +103,7 @@ port already filled in, so there is nothing to type:
 | `ollama` | `http://127.0.0.1:11434` | `ollama serve` |
 | `vllm` | `http://127.0.0.1:8000` | `vllm serve <model>` |
 | `llamacpp` | `http://127.0.0.1:8080` | `llama-server -m <model.gguf> --port 8080` |
-| `ninfer` | `http://127.0.0.1:8081` | `ninfer-serve <model.ninfer> --port 8081` — see [NInfer](#ninfer) below |
+| `ninfer` | `http://127.0.0.1:8081` | Nothing to start by hand if the [NInfer config UI](https://github.com/ssain3d-lgtm/NInfer-lgtm) is installed — Run starts NInfer. See [NInfer](#ninfer) below |
 | `openai_compat` | `openai_compat.base_url` from `config.json` | anything else |
 
 If your server is somewhere else — another port, another machine — put the address
@@ -158,7 +158,7 @@ server — see §7 *Cost*.
   | Ollama | `POST /api/generate` with `keep_alive: 0` | Ollama itself, on the next request |
   | llama.cpp | `POST /models/unload` — **router mode only**; a single-model `llama-server` has no unload | the router (autoload), or the node calls `POST /models/load` |
   | vLLM | `POST /sleep?level=1` — needs `--enable-sleep-mode` and `VLLM_SERVER_DEV_MODE=1` | the node calls `POST /wake_up` before the next run |
-  | NInfer | none — stop the server | — |
+  | NInfer | no unload API — the `ninfer` backend **stops the server** through the NInfer config UI | the node starts the server again on the next run |
 
   `openai_compat` only does this when its address is one of the standard local ports above; for any other server it
   sends nothing and writes a hint to `debug`. Whatever happened is always written to `debug`, and a failed unload never
@@ -170,19 +170,37 @@ server — see §7 *Cost*.
 [NInfer](https://github.com/Neroued/ninfer) (`ninfer-serve`) is the one server in this family that was checked against a
 real machine (Qwen3.8-27B NVFP4 on an RTX 5090, 2026-09). What is different about it:
 
-- **The `model` must be the server's public ID.** NInfer rejects any other name, so pick it from `server_model` —
-  that dropdown reads `/v1/models` — rather than typing one.
+- **Run starts it, and it can stop again after the answer.** NInfer has no API to load or unload a model — the model is
+  fixed when the process starts — so the `ninfer` backend drives the
+  [NInfer config UI](https://github.com/ssain3d-lgtm/NInfer-lgtm) (`http://127.0.0.1:8093`) instead of you:
+  1. On Run it asks the config UI for the state. If NInfer is stopped, it starts it with the model you picked (using the
+     options saved in the config UI's profile) and waits until `/health` answers; the monitor shows the loading progress.
+     If a different `.ninfer` is running, it is stopped and the chosen one is started.
+  2. With `unload_after_generation` on, the server is stopped after the answer, so the VRAM goes back to the image model.
+     The next run starts it again (about 15 s when the model is on the WSL disk).
+  3. If the config UI's VRAM check says there is not enough room, the node unloads ComfyUI's cached models and tries once
+     more. If it fits but only just, it starts anyway and says so in `debug`; if it still does not fit, it stops with an error.
+
+  `server_model` lists the `.ninfer` files of the config UI's model folders even while NInfer is off — pick one there.
+  `(auto)` (or the public ID) uses whatever is running; if nothing is, it starts `ninfer.default_artifact`, else the model
+  used last, else the first one listed. The config UI must be running; set `ninfer.config_ui_script` in `config.json` to
+  the config UI's `server.py` and the node starts it (without a window) when it is not. This only happens on the standard
+  local port (`ninfer.port`, 8081) — an address typed into `openai_base_url` is used as a plain server and never started
+  or stopped. `ninfer.auto_start: false` turns all of this off.
+- **The `model` sent to NInfer must be the server's public ID.** NInfer rejects any other name. The `ninfer` backend
+  reads it from `/v1/models` after the start, so picking a `.ninfer` file is enough.
 - **Thinking is on by default**, and the hidden reasoning counts against `max_tokens`. With the default 2048 a
   reasoning model can spend the whole budget before it answers (the node reports that as
   *"reasoning tokens used up the whole max_tokens budget"*). Either raise `max_tokens`, or switch thinking off by
   putting `{"reasoning_effort": "none"}` in `extra_body`. A `/no_think` line in the prompt does **nothing** on NInfer —
   the model just reads it as text — and neither does a top-level `enable_thinking`.
-- **There is no unload at all** — no API and no idle unload. The model stays in VRAM for as long as the process lives,
-  so `unload_after_generation` cannot free anything and says so in `raw_debug`. Stop the server to get the VRAM back
-  (for example with the Stop button of the [NInfer config UI](https://github.com/ssain3d-lgtm/NInfer-lgtm)).
+- **There is no unload API and no idle unload** — the model stays in VRAM for as long as the process lives. That is
+  why the `ninfer` backend stops the process instead (above). Through `openai_compat` or a non-standard address there is
+  nothing to stop from here, and `unload_after_generation` says so in `raw_debug`.
 - It rejects `top_k` above 20, a negative `max_tokens`, forced JSON output, logprobs and audio input. Images and
   video work when the server was started with `--vision`. `file_access` works (`tool_choice: "auto"` is supported).
-- One artifact per process: to change the model, restart `ninfer-serve` with another `.ninfer` file.
+- One artifact per process: changing the model means restarting `ninfer-serve` with another `.ninfer` file (the `ninfer`
+  backend does that when you pick a different one).
 
 > ⚠️ **This backend has not been verified against real hardware.**
 > It reuses the code path verified with LM Studio, but per-server differences
@@ -207,7 +225,7 @@ real machine (Qwen3.8-27B NVFP4 on an RTX 5090, 2026-09). What is different abou
 | `server_model` | Model dropdown for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer`, read from whichever of those servers is running **on this machine**. `(auto)` falls back to the `model` field |
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
-| `unload_after_generation` | Same for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer`: load → generate → unload right away (off by default). See §2-1 |
+| `unload_after_generation` | Same for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer`: load → generate → unload right away (off by default; on `ninfer` it stops the server). See §2-1 |
 | `openai_base_url` | Server address. Only needed when the server is **not** on its standard port (`openai_compat` and its `ollama`/`vllm`/`llamacpp`/`ninfer` presets) |
 | `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
 | `seed` | Busts ComfyUI's cache so the same prompt runs again. On `lmstudio` / `openai_compat` a **non-zero** value is also sent to the server as the sampling seed; `0` sends nothing. The three CLIs have no seed flag |
@@ -513,6 +531,14 @@ never committed to git.)
     "default_model": "",
     "unload_after": false
   },
+  "ninfer": {
+    "config_ui_url": "http://127.0.0.1:8093",
+    "config_ui_script": "",
+    "default_artifact": "",
+    "auto_start": true,
+    "port": 8081,
+    "start_timeout_s": 600
+  },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
     "gemini_model": "gemini-3-flash",
@@ -614,7 +640,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > or Ollama running, the tests talk to your real server and widget defaults differ
 > per machine.
 
-**498 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**518 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -759,7 +785,7 @@ Ollama·vLLM·llama.cpp·NInfer 는 모두 OpenAI 호환 `/v1/chat/completions` 
 | `ollama` | `http://127.0.0.1:11434` | `ollama serve` |
 | `vllm` | `http://127.0.0.1:8000` | `vllm serve <모델>` |
 | `llamacpp` | `http://127.0.0.1:8080` | `llama-server -m <모델.gguf> --port 8080` |
-| `ninfer` | `http://127.0.0.1:8081` | `ninfer-serve <모델.ninfer> --port 8081` — 아래 [NInfer](#ninfer-1) 참고 |
+| `ninfer` | `http://127.0.0.1:8081` | [NInfer 설정 UI](https://github.com/ssain3d-lgtm/NInfer-lgtm) 가 있으면 손으로 띄울 것이 없습니다 — 실행 버튼이 NInfer 를 띄웁니다. 아래 [NInfer](#ninfer-1) 참고 |
 | `openai_compat` | `config.json` 의 `openai_compat.base_url` | 그 밖의 서버 |
 
 서버가 다른 포트나 다른 PC 에 있으면 `openai_base_url` 에 주소를 적으세요 —
@@ -811,7 +837,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
   | Ollama | `POST /api/generate` + `keep_alive: 0` | 다음 요청 때 Ollama 가 알아서 |
   | llama.cpp | `POST /models/unload` — **라우터 모드에서만**. 모델 하나만 띄운 `llama-server` 에는 언로드가 없습니다 | 라우터 자동 적재, 또는 노드가 `POST /models/load` |
   | vLLM | `POST /sleep?level=1` — `--enable-sleep-mode` 와 `VLLM_SERVER_DEV_MODE=1` 필요 | 다음 실행 전에 노드가 `POST /wake_up` |
-  | NInfer | 없음 — 서버를 중지하세요 | — |
+  | NInfer | 언로드 API 없음 — `ninfer` 백엔드가 NInfer 설정 UI 로 **서버를 중지** | 다음 실행 때 노드가 서버를 다시 띄움 |
 
   `openai_compat` 은 주소가 위의 표준 로컬 포트일 때만 이렇게 합니다. 다른 서버에는 아무 요청도 보내지 않고 `debug` 에 안내만
   남깁니다. 무슨 일이 있었는지는 늘 `debug` 에 적히고, 언로드가 실패해도 정상 응답을 오류로 바꾸지 않습니다.
@@ -822,18 +848,34 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 [NInfer](https://github.com/Neroued/ninfer)(`ninfer-serve`)는 이 계열에서 유일하게 실기기로 확인한 서버입니다
 (Qwen3.8-27B NVFP4, RTX 5090, 2026-09). 다른 서버와 다른 점:
 
-- **`model` 은 서버의 공개 ID 여야 합니다.** 다른 이름은 NInfer 가 거절하므로 직접 적지 말고 `server_model` 에서
-  고르세요 — 그 드롭다운이 `/v1/models` 를 읽어 옵니다.
+- **실행 버튼이 서버를 띄우고, 답을 받은 뒤 내릴 수도 있습니다.** NInfer 에는 모델을 올리고 내리는 API 가 없어서(모델은 프로세스를
+  띄울 때 정해집니다) `ninfer` 백엔드가 [NInfer 설정 UI](https://github.com/ssain3d-lgtm/NInfer-lgtm)(`http://127.0.0.1:8093`)를
+  대신 조작합니다.
+  1. 실행하면 설정 UI 에 상태를 묻습니다. NInfer 가 꺼져 있으면 고른 모델로(설정 UI 프로필에 저장된 옵션으로) 띄우고 `/health` 가
+     답할 때까지 기다립니다. 모니터 창에 로딩 진행이 보입니다. 다른 `.ninfer` 가 돌고 있으면 내리고 고른 것으로 다시 띄웁니다.
+  2. `unload_after_generation` 을 켜면 답을 받은 뒤 서버를 중지해 VRAM 을 이미지 모델에 돌려줍니다. 다음 실행 때 다시 뜹니다
+     (모델이 WSL 디스크에 있으면 약 15초).
+  3. 설정 UI 의 VRAM 점검이 자리가 없다고 하면 ComfyUI 가 캐시해 둔 모델을 내리고 한 번 더 시도합니다. 빠듯하게라도 들어가면
+     띄우고 `debug` 에 적고, 그래도 안 들어가면 오류로 멈춥니다.
+
+  `server_model` 에는 NInfer 가 꺼져 있어도 설정 UI 모델 폴더의 `.ninfer` 파일이 나옵니다 — 거기서 고르세요.
+  `(auto)`(또는 공개 ID)는 돌고 있는 모델을 쓰고, 아무것도 안 돌면 `ninfer.default_artifact`, 없으면 직전에 쓴 모델, 그것도 없으면
+  목록의 첫 모델을 띄웁니다. 설정 UI 는 떠 있어야 합니다. `config.json` 의 `ninfer.config_ui_script` 에 설정 UI 의 `server.py` 경로를
+  적어 두면 꺼져 있을 때 노드가 (창 없이) 띄웁니다. 이 관리는 표준 로컬 포트(`ninfer.port`, 8081)에서만 합니다 — `openai_base_url` 에
+  적은 주소는 그냥 서버로 쓰고 켜거나 끄지 않습니다. `ninfer.auto_start: false` 면 전부 끕니다.
+- **NInfer 로 보내는 `model` 은 서버의 공개 ID 여야 합니다.** 다른 이름은 NInfer 가 거절합니다. `ninfer` 백엔드는 기동 후
+  `/v1/models` 에서 그 ID 를 읽어 보내므로 `.ninfer` 파일을 고르기만 하면 됩니다.
 - **thinking 이 기본으로 켜져 있고**, 보이지 않는 추론도 `max_tokens` 에 포함됩니다. 기본값 2048 이면 추론 모델이 답하기 전에
   예산을 다 쓸 수 있습니다(노드는 이걸 *"reasoning tokens used up the whole max_tokens budget"* 로 알려줍니다).
   `max_tokens` 를 올리거나, `extra_body` 에 `{"reasoning_effort": "none"}` 을 넣어 thinking 을 끄세요. 프롬프트에 `/no_think` 를
   적는 것은 NInfer 에서 **효과가 없습니다** — 모델이 글자로 읽을 뿐입니다. top-level `enable_thinking` 도 듣지 않습니다.
-- **언로드가 아예 없습니다** — API 도, 유휴 언로드도 없습니다. 프로세스가 사는 동안 모델이 VRAM 에 상주하므로
-  `unload_after_generation` 은 아무것도 비우지 못하고 `raw_debug` 에 그렇게 적습니다. VRAM 을 돌려받으려면 서버를 중지하세요
-  (예: [NInfer 설정 UI](https://github.com/ssain3d-lgtm/NInfer-lgtm) 의 중지 버튼).
+- **언로드 API 도, 유휴 언로드도 없습니다** — 프로세스가 사는 동안 모델이 VRAM 에 상주합니다. 그래서 `ninfer` 백엔드는 대신
+  프로세스를 중지합니다(위). `openai_compat` 이나 표준이 아닌 주소로 쓰면 여기서 중지할 수단이 없고, `unload_after_generation` 은
+  그렇다고 `raw_debug` 에 적습니다.
 - 20 을 넘는 `top_k`, 음수 `max_tokens`, JSON 강제 출력, logprobs, 오디오 입력은 거절합니다. 이미지·비디오는 서버를 `--vision` 으로
   띄웠을 때 됩니다. `file_access` 는 됩니다(`tool_choice: "auto"` 지원).
-- 프로세스당 artifact 하나입니다. 모델을 바꾸려면 다른 `.ninfer` 파일로 `ninfer-serve` 를 다시 띄웁니다.
+- 프로세스당 artifact 하나입니다. 모델을 바꾸면 다른 `.ninfer` 파일로 `ninfer-serve` 를 다시 띄워야 합니다(`ninfer` 백엔드는 다른
+  모델을 고르면 그렇게 합니다).
 
 > ⚠️ **이 백엔드는 실기기 검증을 하지 못했습니다.**
 > LM Studio 로 검증된 코드 경로를 그대로 쓰지만, 서버마다 다른 부분(SSE 청크 모양,
@@ -859,7 +901,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 | `server_model` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` 용 모델 드롭다운. **이 컴퓨터에** 떠 있는 서버에서 읽어옵니다. `(auto)`면 `model` 칸을 따름 |
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
-| `unload_after_generation` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` 용: 올리기 → 생성 → 즉시 내리기 (기본 꺼짐). §2-1 참고 |
+| `unload_after_generation` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` 용: 올리기 → 생성 → 즉시 내리기 (기본 꺼짐. `ninfer` 는 서버를 중지). §2-1 참고 |
 | `openai_base_url` | 서버 주소. 표준 포트가 **아닐 때만** 채우면 됩니다 (`openai_compat` 과 `ollama`/`vllm`/`llamacpp`/`ninfer` 프리셋용) |
 | `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
 | `seed` | ComfyUI 캐시를 무효화해 같은 프롬프트를 다시 돌리게 합니다. `lmstudio` / `openai_compat` 에서는 **0이 아닌 값**이면 샘플링 시드로 서버에도 함께 보냅니다(0이면 안 보냅니다). CLI 3종에는 시드 플래그가 없습니다 |
@@ -1161,6 +1203,14 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
     "default_model": "",
     "unload_after": false
   },
+  "ninfer": {
+    "config_ui_url": "http://127.0.0.1:8093",
+    "config_ui_script": "",
+    "default_artifact": "",
+    "auto_start": true,
+    "port": 8081,
+    "start_timeout_s": 600
+  },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
     "gemini_model": "gemini-3-flash",
@@ -1264,7 +1314,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > `127.0.0.1` 의 1234 / 11434 / 8000 / 8080 을 두드려서, LM Studio 나 Ollama 를
 > 켜두셨다면 테스트가 실제 서버로 요청을 보내고 위젯 기본값도 머신마다 달라집니다.
 
-**498종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**518종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 
