@@ -11,11 +11,11 @@ generate text inside your workflow. Run a local model (LM Studio) or the
 subscription CLIs you already pay for (Claude Code / Codex / Gemini) through the
 same node, switching between them without rewiring anything.
 
-- **5 backends**: `lmstudio` / `claude` / `codex` / `gemini` / `openai_compat` (Ollama, vLLM, llama.cpp, NInfer)
+- **5 backends**: `lmstudio` / `claude` / `codex` / `gemini` / `openai_compat` (Ollama, vLLM, llama.cpp, NInfer, Strata)
 - **File access**: let the model read files inside a folder you choose
 - **Image and video input**: multimodal prompts
 - **Live monitor on the node**: watch the text as it is generated (plain / markdown)
-- **Automatic VRAM release**: load → generate → unload right away (LM Studio, Ollama, llama.cpp router, vLLM sleep mode), or after an idle timeout
+- **Automatic VRAM release**: load → generate → unload right away (LM Studio, Ollama, llama.cpp router, vLLM sleep mode, Strata), or after an idle timeout
 - **Always three outputs**: `text` / `status` / `debug` — the node never kills your workflow with an exception
 
 > **Only `requests` is added to pip.** Everything else uses the standard library or
@@ -81,22 +81,22 @@ replace them with your own.
 | `claude` | Claude Code installed + Pro/Max login | Run `claude` in a terminal and check you are logged in |
 | `codex` | Codex CLI installed + ChatGPT login | `codex login` |
 | `gemini` | Gemini CLI installed + Google account login | Run `gemini` and log in |
-| `ollama` / `vllm` / `llamacpp` / `ninfer` | That server running locally | See §2-1 below |
+| `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata` | That server running locally | See §2-1 below |
 | `openai_compat` | Any other OpenAI-compatible server, or a hosted provider | See §2-1 below |
 
 - To use `file_access`, load a **tool-capable model** in LM Studio (the Qwen family works well).
 - To use images or video, load a **VLM (vision) model** in LM Studio.
 - If a CLI is not on your PATH, put its absolute path in `cli_paths` in `config.json`.
 
-### 2-1. OpenAI-compatible servers (Ollama / vLLM / llama.cpp / NInfer)
+### 2-1. OpenAI-compatible servers (Ollama / vLLM / llama.cpp / NInfer / Strata)
 
 All of them expose an OpenAI-compatible `/v1/chat/completions` endpoint. The
 `openai_compat` backend reuses **exactly the same code path as LM Studio** and
 only changes the address.
 
 **Pick the server straight from the `backend` dropdown.** `ollama`, `vllm`,
-`llamacpp` and `ninfer` are the same backend as `openai_compat` with that server's standard
-port already filled in, so there is nothing to type:
+`llamacpp`, `ninfer` and `strata` are the same backend as `openai_compat` with that server's
+standard port already filled in, so there is nothing to type:
 
 | `backend` | Address it uses | Start the server with |
 |---|---|---|
@@ -104,10 +104,11 @@ port already filled in, so there is nothing to type:
 | `vllm` | `http://127.0.0.1:8000` | `vllm serve <model>` |
 | `llamacpp` | `http://127.0.0.1:8080` | `llama-server -m <model.gguf> --port 8080` |
 | `ninfer` | `http://127.0.0.1:8081` | Nothing to start by hand if the [NInfer config UI](https://github.com/ssain3d-lgtm/NInfer-lgtm) is installed — Run starts NInfer. See [NInfer](#ninfer) below |
+| `strata` | `http://127.0.0.1:8080` | `run-<model>.bat` in the Strata folder — or nothing, once `strata.root` in `config.json` points at that folder: Run starts it. See [Strata](#strata) below |
 | `openai_compat` | `openai_compat.base_url` from `config.json` | anything else |
 
 If your server is somewhere else — another port, another machine — put the address
-in `openai_base_url` and it wins over the preset. On `ollama` / `vllm` / `llamacpp` / `ninfer`
+in `openai_base_url` and it wins over the preset. On `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata`
 that box is **folded into the advanced options** (click **`▾`** on the title bar),
 because the address is already set and an empty box sitting in plain sight reads
 like something you have to fill in. On `openai_compat` it stays visible, since
@@ -159,6 +160,7 @@ server — see §7 *Cost*.
   | llama.cpp | `POST /models/unload` — **router mode only**; a single-model `llama-server` has no unload | the router (autoload), or the node calls `POST /models/load` |
   | vLLM | `POST /sleep?level=1` — needs `--enable-sleep-mode` and `VLLM_SERVER_DEV_MODE=1` | the node calls `POST /wake_up` before the next run |
   | NInfer | no unload API — the `ninfer` backend **stops the server** through the NInfer config UI | the node starts the server again on the next run |
+  | Strata | `POST /unload` — the engine quits and gives back its VRAM and RAM; the server keeps listening | the node sends `POST /load` before the next run, or starts the server if it is not running |
 
   `openai_compat` only does this when its address is one of the standard local ports above; for any other server it
   sends nothing and writes a hint to `debug`. Whatever happened is always written to `debug`, and a failed unload never
@@ -216,8 +218,40 @@ real machine (Qwen3.8-27B NVFP4 on an RTX 5090, 2026-09). What is different abou
 - One artifact per process: changing the model means restarting `ninfer-serve` with another `.ninfer` file (the `ninfer`
   backend does that when you pick a different one).
 
-> ⚠️ **This backend has not been verified against real hardware.**
-> It reuses the code path verified with LM Studio, but per-server differences
+#### Strata
+
+[Strata](https://github.com/Niko1221/Strata) runs **Qwen3.8-Flash-Next** on one gaming PC. Its `serve/server.py` speaks the
+OpenAI API on **port 8080 — the same port as llama.cpp**, so the node tells the two apart by `/health` (`"service": "strata"`)
+and stops with a clear error when something else answers there. What is different about it:
+
+- **Load → generate → unload uses the server's own API.** `unload_after_generation` sends `POST /unload`: the engine quits and
+  gives back its VRAM *and* its pinned RAM, while the server keeps listening. The next run sends `POST /load` first (1–3 minutes;
+  the monitor says so) and then generates. Before a load or a start the node unloads ComfyUI's cached models
+  (`strata.free_comfy_vram`, on by default) so Strata gets the card to itself.
+- **Run starts the server when it is not running**, once `strata.root` in `config.json` points at the Strata folder (the one
+  with `.venv` and the `strata-<model>.json` files). It runs the same command as `run-<model>.bat`, without a window and without
+  `--open`; the server's output goes to `strata-server.log` next to this file. `server_model` lists the `model_name` of every
+  `strata-<model>.json` in that folder even while the server is off — pick one there (the file's `<model>` tag, such as
+  `iq3_xxs`, is accepted in `model` too). `(auto)` uses whatever is running; if nothing is, it starts `strata.model`, else the
+  most recently used config. With `strata.root` empty the node only talks to a server that is already up and tells you how to
+  start one. Only the standard local port (`strata.port`, 8080) is managed — an address typed into `openai_base_url` is used as
+  a plain server, except that `/unload` is still sent there. `strata.auto_start: false` turns the management off.
+- **Switching models means another process** — Strata has no API for it. A server this ComfyUI session started is unloaded,
+  ended and started again with the chosen config. A server you started yourself (its own window) is left alone, and the run
+  stops with an error naming the running model: pick that one, or close its window and run again.
+- **Thinking is on by default (`high`)**, streamed as `reasoning_content`, and it counts against `max_tokens`. The
+  **`reasoning`** widget works as on NInfer: `off` sends `reasoning_effort: "none"`, `low` / `medium` / `high` that level, `on`
+  `chat_template_kwargs.enable_thinking: true`, `(default)` nothing — then Strata's own Chat settings decide.
+- **Any `model` name is accepted**; the answer carries the server's name (`model_name` in `strata-<model>.json`, for example
+  `qwen3.8-flash-next-iq3_xxs`). `seed`, tools (`file_access`), images (a config started with `--vision`) and `extra_body` work.
+  A prompt plus `max_tokens` longer than the context is refused with 400 unless the config has `"fit_max_tokens": true`.
+
+> Checked against a real Strata (engine 0.1.41, `qwen3.8-flash-next-iq3_xxs`, RTX 5090, 2026-10-10): generate → `/unload`
+> → `/load` → generate, with the reload taking 18 s. Starting the server from Run and switching models are covered by the
+> fake server in `tests/test_strata_lifecycle.py`. If your Strata behaves differently, please report it with the `debug` output.
+
+> ⚠️ **Ollama / vLLM / llama.cpp have not been verified against real hardware.**
+> They reuse the code path verified with LM Studio, but per-server differences
 > (SSE chunk shape, error response format) cannot be confirmed without testing.
 > If you hit a problem, please report it with the `debug` output.
 
@@ -236,13 +270,13 @@ real machine (Qwen3.8-27B NVFP4 on an RTX 5090, 2026-09). What is different abou
 | `video_max_frames` | How many frames to extract when converting video (default 8) |
 | `stream_view` | Monitor display mode: `plain` (default) / `markdown` / `off` |
 | `lmstudio_model` | LM Studio model dropdown. `(auto)` falls back to the `model` field and config |
-| `server_model` | Model dropdown for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer`, read from whichever of those servers is running **on this machine**. `(auto)` falls back to the `model` field |
+| `server_model` | Model dropdown for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata`, read from whichever of those servers is running **on this machine**. `(auto)` falls back to the `model` field |
 | `lmstudio_ttl_sec` | LM Studio idle TTL in seconds. Unloads from VRAM after this long with no request |
 | `lmstudio_unload_after` | Unload from VRAM immediately after the response (on by default) |
-| `unload_after_generation` | Same for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer`: load → generate → unload right away (off by default; on `ninfer` it stops the server). See §2-1 |
+| `unload_after_generation` | Same for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata`: load → generate → unload right away (off by default; on `ninfer` it stops the server, on `strata` it sends `POST /unload`). See §2-1 |
 | `ninfer_context` | `ninfer` only: context NInfer starts with (`max-context` and `kv-capacity`), this start only. `0` = what is running / the profile. See [NInfer](#ninfer) |
-| `reasoning` | `ninfer` only: thinking for this request — `(default)` / `off` / `on` / `low` / `medium` / `high`. See [NInfer](#ninfer) |
-| `openai_base_url` | Server address. Only needed when the server is **not** on its standard port (`openai_compat` and its `ollama`/`vllm`/`llamacpp`/`ninfer` presets) |
+| `reasoning` | `ninfer` / `strata` only: thinking for this request — `(default)` / `off` / `on` / `low` / `medium` / `high`. See [NInfer](#ninfer) and [Strata](#strata) |
+| `openai_base_url` | Server address. Only needed when the server is **not** on its standard port (`openai_compat` and its `ollama`/`vllm`/`llamacpp`/`ninfer`/`strata` presets) |
 | `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
 | `seed` | Busts ComfyUI's cache so the same prompt runs again. On `lmstudio` / `openai_compat` a **non-zero** value is also sent to the server as the sampling seed; `0` sends nothing. The three CLIs have no seed flag |
 | `batch_mode` | What to do with an image batch: `all_in_one` (default) or `one_per_image`. See §5 |
@@ -556,6 +590,14 @@ never committed to git.)
     "start_timeout_s": 600,
     "free_comfy_vram": true
   },
+  "strata": {
+    "root": "",
+    "model": "",
+    "auto_start": true,
+    "port": 8080,
+    "start_timeout_s": 600,
+    "free_comfy_vram": true
+  },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
     "gemini_model": "gemini-3-flash",
@@ -576,6 +618,7 @@ never committed to git.)
     In `append` mode the built-in prompt is strong enough to dilute instructions like "answer in English only" — measured, not guessed.
 - `lmstudio.ttl_sec` / `lmstudio.unload_after`: these become the **widget defaults** on the node. Per-run widget values take priority.
 - `openai_compat.unload_after` (default `false`): the default of `unload_after_generation`.
+- `strata.root`: the Strata folder, so that Run can start `serve/server.py` when the server is off; `strata.model` names the `strata-<model>.json` to start when nothing is chosen (empty = the most recently used). See [Strata](#strata).
 - `cli_paths.lms`: path to the LM Studio CLI. Only needed for LM Studio older than 0.4, which has no REST unload.
 - `allow_unsafe_extra_args` (default `false`): whether `extra_args` may contain flags that unlock the read-only sandbox (`--dangerously-*`, `--allowedTools Bash`, `-s danger-full-access`, `--yolo`, …). **Blocked by default.** Only set it to `true` if you genuinely need it.
 - Secrets such as `api_token` are never included in `debug` output.
@@ -657,7 +700,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > or Ollama running, the tests talk to your real server and widget defaults differ
 > per machine.
 
-**539 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**581 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -717,11 +760,11 @@ ComfyUI에서 LLM 백엔드를 드롭다운으로 골라 텍스트를 생성하�
 로컬 모델(LM Studio)과 이미 쓰고 있는 구독 CLI(Claude Code / Codex / Gemini)를
 같은 노드 하나로 바꿔가며 쓸 수 있습니다.
 
-- **5개 백엔드**: `lmstudio` / `claude` / `codex` / `gemini` / `openai_compat`(Ollama·vLLM·llama.cpp·NInfer)
+- **5개 백엔드**: `lmstudio` / `claude` / `codex` / `gemini` / `openai_compat`(Ollama·vLLM·llama.cpp·NInfer·Strata)
 - **파일 접근**: 지정한 폴더 안의 파일을 LLM이 읽고 답할 수 있음
 - **이미지 · 비디오 입력**: 멀티모달 프롬프트 지원
 - **실시간 모니터링 창**: 생성 중인 텍스트를 노드 안에서 바로 확인 (plain / markdown)
-- **VRAM 자동 해제**: 올리기 → 생성 → 즉시 내리기 (LM Studio, Ollama, llama.cpp 라우터, vLLM sleep 모드), 또는 유휴 시간 뒤 내림
+- **VRAM 자동 해제**: 올리기 → 생성 → 즉시 내리기 (LM Studio, Ollama, llama.cpp 라우터, vLLM sleep 모드, Strata), 또는 유휴 시간 뒤 내림
 - **항상 3개 출력**: `text` / `status` / `debug` — 노드가 예외로 워크플로우를 죽이지 않음
 
 ---
@@ -781,19 +824,19 @@ pip 의존성은 **`requests` 하나**입니다.
 | `claude` | Claude Code 설치 + Pro/Max 로그인 | 터미널에서 `claude` 실행 → 로그인 상태 확인 |
 | `codex` | Codex CLI 설치 + ChatGPT 로그인 | `codex login` |
 | `gemini` | Gemini CLI 설치 + 구글 계정 로그인 | `gemini` 실행 후 로그인 |
-| `ollama` / `vllm` / `llamacpp` / `ninfer` | 해당 서버를 로컬에서 실행 | 아래 §2-1 참조 |
+| `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata` | 해당 서버를 로컬에서 실행 | 아래 §2-1 참조 |
 | `openai_compat` | 그 밖의 OpenAI 호환 서버, 또는 유료 API | 아래 §2-1 참조 |
 
 - 파일 접근(`file_access`)을 쓰려면 LM Studio에서 **tool use를 지원하는 모델**(Qwen 계열 권장)을 로드하세요.
 - 이미지/비디오를 쓰려면 LM Studio에서 **VLM(비전) 모델**을 로드해야 합니다.
 - CLI가 PATH에 없으면 `config.json`의 `cli_paths`에 절대경로를 적으면 됩니다.
 
-### 2-1. OpenAI 호환 서버 (Ollama / vLLM / llama.cpp / NInfer)
+### 2-1. OpenAI 호환 서버 (Ollama / vLLM / llama.cpp / NInfer / Strata)
 
-Ollama·vLLM·llama.cpp·NInfer 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제공합니다.
+Ollama·vLLM·llama.cpp·NInfer·Strata 는 모두 OpenAI 호환 `/v1/chat/completions` 를 제공합니다.
 `openai_compat` 백엔드는 **LM Studio 와 똑같은 코드 경로**를 쓰고 주소만 바꿉니다.
 
-**`backend` 드롭다운에서 서버를 바로 고르면 됩니다.** `ollama` / `vllm` / `llamacpp` / `ninfer`
+**`backend` 드롭다운에서 서버를 바로 고르면 됩니다.** `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata`
 는 `openai_compat` 과 같은 백엔드에 그 서버의 표준 포트만 미리 넣어둔 것이라,
 주소를 칠 필요가 없습니다.
 
@@ -803,10 +846,11 @@ Ollama·vLLM·llama.cpp·NInfer 는 모두 OpenAI 호환 `/v1/chat/completions` 
 | `vllm` | `http://127.0.0.1:8000` | `vllm serve <모델>` |
 | `llamacpp` | `http://127.0.0.1:8080` | `llama-server -m <모델.gguf> --port 8080` |
 | `ninfer` | `http://127.0.0.1:8081` | [NInfer 설정 UI](https://github.com/ssain3d-lgtm/NInfer-lgtm) 가 있으면 손으로 띄울 것이 없습니다 — 실행 버튼이 NInfer 를 띄웁니다. 아래 [NInfer](#ninfer-1) 참고 |
+| `strata` | `http://127.0.0.1:8080` | Strata 폴더의 `run-<모델>.bat` — `config.json` 의 `strata.root` 에 그 폴더를 적어 두면 띄울 것이 없습니다. 실행 버튼이 띄웁니다. 아래 [Strata](#strata-1) 참고 |
 | `openai_compat` | `config.json` 의 `openai_compat.base_url` | 그 밖의 서버 |
 
 서버가 다른 포트나 다른 PC 에 있으면 `openai_base_url` 에 주소를 적으세요 —
-미리 넣어둔 값보다 우선합니다. `ollama` / `vllm` / `llamacpp` / `ninfer` 에서는 이 칸이
+미리 넣어둔 값보다 우선합니다. `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata` 에서는 이 칸이
 **고급 옵션 안에 접혀 있습니다** (제목 줄의 **`▾`**). 주소가 이미 잡혀 있는데
 빈 칸이 눈에 띄는 자리에 있으면 "채워야 도는구나" 로 읽히기 때문입니다.
 `openai_compat` 에서는 기본값이 없으므로 그대로 보입니다.
@@ -855,6 +899,7 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
   | llama.cpp | `POST /models/unload` — **라우터 모드에서만**. 모델 하나만 띄운 `llama-server` 에는 언로드가 없습니다 | 라우터 자동 적재, 또는 노드가 `POST /models/load` |
   | vLLM | `POST /sleep?level=1` — `--enable-sleep-mode` 와 `VLLM_SERVER_DEV_MODE=1` 필요 | 다음 실행 전에 노드가 `POST /wake_up` |
   | NInfer | 언로드 API 없음 — `ninfer` 백엔드가 NInfer 설정 UI 로 **서버를 중지** | 다음 실행 때 노드가 서버를 다시 띄움 |
+  | Strata | `POST /unload` — 엔진이 끝나며 VRAM 과 RAM 을 돌려주고, 서버는 계속 듣습니다 | 다음 실행 전에 노드가 `POST /load`, 서버가 꺼져 있으면 띄움 |
 
   `openai_compat` 은 주소가 위의 표준 로컬 포트일 때만 이렇게 합니다. 다른 서버에는 아무 요청도 보내지 않고 `debug` 에 안내만
   남깁니다. 무슨 일이 있었는지는 늘 `debug` 에 적히고, 언로드가 실패해도 정상 응답을 오류로 바꾸지 않습니다.
@@ -906,7 +951,37 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 - 프로세스당 artifact 하나입니다. 모델을 바꾸면 다른 `.ninfer` 파일로 `ninfer-serve` 를 다시 띄워야 합니다(`ninfer` 백엔드는 다른
   모델을 고르면 그렇게 합니다).
 
-> ⚠️ **이 백엔드는 실기기 검증을 하지 못했습니다.**
+#### Strata
+
+[Strata](https://github.com/Niko1221/Strata) 는 **Qwen3.8-Flash-Next** 를 게이밍 PC 한 대에서 돌리는 엔진입니다. `serve/server.py` 가
+OpenAI API 를 **8080 포트 — llama.cpp 와 같은 포트** 에 내므로, 노드는 `/health` 의 `"service": "strata"` 로 둘을 가르고 다른 것이
+답하면 그렇다고 말하며 멈춥니다. 다른 서버와 다른 점:
+
+- **올리기 → 생성 → 내리기가 서버 자체의 API 입니다.** `unload_after_generation` 을 켜면 `POST /unload` 를 보냅니다: 엔진이 끝나며
+  VRAM *과* 고정 RAM 을 돌려주고, 서버는 계속 듣습니다. 다음 실행은 먼저 `POST /load`(1~3분, 모니터에 표시)를 보낸 뒤 생성합니다.
+  올리거나 띄우기 전에 ComfyUI 가 캐시해 둔 모델을 내립니다(`strata.free_comfy_vram`, 기본 켬) — Strata 가 카드를 혼자 쓰게.
+- **서버가 꺼져 있으면 실행 버튼이 띄웁니다.** `config.json` 의 `strata.root` 에 Strata 폴더(`.venv` 와 `strata-<모델>.json` 이 있는
+  곳)를 적어 두면 됩니다. `run-<모델>.bat` 와 같은 명령을 창 없이, `--open` 없이 실행하고, 서버 출력은 이 파일 옆의
+  `strata-server.log` 에 쌓입니다. `server_model` 에는 서버가 꺼져 있어도 그 폴더의 `strata-<모델>.json` 들의 `model_name` 이
+  나옵니다 — 거기서 고르세요(`model` 칸에 파일의 `<모델>` 태그, 예: `iq3_xxs` 를 적어도 됩니다). `(auto)` 는 돌고 있는 모델을 쓰고,
+  아무것도 안 돌면 `strata.model`, 없으면 가장 최근에 쓴 설정을 띄웁니다. `strata.root` 가 비어 있으면 떠 있는 서버만 쓰고, 어떻게
+  띄우는지 알려줍니다. 이 관리는 표준 로컬 포트(`strata.port`, 8080)에서만 합니다 — `openai_base_url` 에 적은 주소는 그냥 서버로
+  쓰되, `/unload` 만은 거기에도 보냅니다. `strata.auto_start: false` 면 관리를 끕니다.
+- **모델을 바꾸면 프로세스가 바뀝니다** — Strata 에는 모델을 바꾸는 API 가 없습니다. 이 ComfyUI 세션이 띄운 서버는 내리고 끝낸 뒤
+  고른 설정으로 다시 띄웁니다. 직접 띄운 서버(자기 창)는 건드리지 않고, 돌고 있는 모델 이름을 말하며 오류로 멈춥니다: 그 모델을
+  고르거나, 창을 닫고 다시 실행하세요.
+- **thinking 이 기본으로 켜져 있고(`high`)**, `reasoning_content` 로 스트리밍되며 `max_tokens` 에 포함됩니다. **`reasoning`** 위젯은
+  NInfer 와 같이 듣습니다: `off` 는 `reasoning_effort: "none"`, `low` / `medium` / `high` 는 그 단계, `on` 은
+  `chat_template_kwargs.enable_thinking: true`, `(default)` 는 아무것도 안 보냅니다 — 그러면 Strata 의 채팅 설정이 정합니다.
+- **`model` 은 아무 이름이나 받습니다.** 답에는 서버의 이름(`strata-<모델>.json` 의 `model_name`, 예: `qwen3.8-flash-next-iq3_xxs`)이
+  실립니다. `seed`, 도구(`file_access`), 이미지(`--vision` 으로 띄운 설정), `extra_body` 가 됩니다. 입력 + `max_tokens` 가 컨텍스트보다
+  길면 400 으로 거절합니다(설정에 `"fit_max_tokens": true` 가 있으면 줄여서 받습니다).
+
+> 실제 Strata(엔진 0.1.41, `qwen3.8-flash-next-iq3_xxs`, RTX 5090, 2026-10-10)로 확인했습니다: 생성 → `/unload` → `/load` → 생성,
+> 다시 올리는 데 18초. 실행 버튼으로 서버를 띄우는 것과 모델 바꾸기는 가짜 서버로 검증했습니다(`tests/test_strata_lifecycle.py`).
+> 실제 Strata 가 다르게 굴면 `debug` 출력과 함께 알려주세요.
+
+> ⚠️ **Ollama / vLLM / llama.cpp 는 실기기 검증을 하지 못했습니다.**
 > LM Studio 로 검증된 코드 경로를 그대로 쓰지만, 서버마다 다른 부분(SSE 청크 모양,
 > 오류 응답 형식)은 실측 없이 확인할 수 없습니다. 문제가 있으면 `debug` 출력과 함께 알려주세요.
 
@@ -927,13 +1002,13 @@ setx OPENAI_COMPAT_API_KEY "sk-..."
 | `video_max_frames` | 비디오를 프레임으로 바꿀 때 뽑을 장수 (기본 8) |
 | `stream_view` | 모니터링 창 표시 방식: `plain`(기본) / `markdown` / `off` |
 | `lmstudio_model` | LM Studio 모델 드롭다운. `(auto)`면 `model` 칸/설정을 따름 |
-| `server_model` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` 용 모델 드롭다운. **이 컴퓨터에** 떠 있는 서버에서 읽어옵니다. `(auto)`면 `model` 칸을 따름 |
+| `server_model` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata` 용 모델 드롭다운. **이 컴퓨터에** 떠 있는 서버에서 읽어옵니다. `(auto)`면 `model` 칸을 따름 |
 | `lmstudio_ttl_sec` | LM Studio 유휴 TTL(초). 이 시간 요청이 없으면 VRAM에서 내림 |
 | `lmstudio_unload_after` | 응답 직후 즉시 VRAM에서 내림 (기본 켜짐) |
-| `unload_after_generation` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` 용: 올리기 → 생성 → 즉시 내리기 (기본 꺼짐. `ninfer` 는 서버를 중지). §2-1 참고 |
+| `unload_after_generation` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata` 용: 올리기 → 생성 → 즉시 내리기 (기본 꺼짐. `ninfer` 는 서버를 중지, `strata` 는 `POST /unload`). §2-1 참고 |
 | `ninfer_context` | `ninfer` 전용: NInfer 를 띄울 컨텍스트(`max-context`·`kv-capacity`), 그 기동에만. `0` = 떠 있는 것 / 프로필 값. [NInfer](#ninfer-1) 참고 |
-| `reasoning` | `ninfer` 전용: 이 요청의 thinking — `(default)` / `off` / `on` / `low` / `medium` / `high`. [NInfer](#ninfer-1) 참고 |
-| `openai_base_url` | 서버 주소. 표준 포트가 **아닐 때만** 채우면 됩니다 (`openai_compat` 과 `ollama`/`vllm`/`llamacpp`/`ninfer` 프리셋용) |
+| `reasoning` | `ninfer` / `strata` 전용: 이 요청의 thinking — `(default)` / `off` / `on` / `low` / `medium` / `high`. [NInfer](#ninfer-1) · [Strata](#strata-1) 참고 |
+| `openai_base_url` | 서버 주소. 표준 포트가 **아닐 때만** 채우면 됩니다 (`openai_compat` 과 `ollama`/`vllm`/`llamacpp`/`ninfer`/`strata` 프리셋용) |
 | `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
 | `seed` | ComfyUI 캐시를 무효화해 같은 프롬프트를 다시 돌리게 합니다. `lmstudio` / `openai_compat` 에서는 **0이 아닌 값**이면 샘플링 시드로 서버에도 함께 보냅니다(0이면 안 보냅니다). CLI 3종에는 시드 플래그가 없습니다 |
 | `batch_mode` | 이미지 배치를 어떻게 다룰지: `all_in_one`(기본) 또는 `one_per_image`. §5 참조 |
@@ -1243,6 +1318,14 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
     "start_timeout_s": 600,
     "free_comfy_vram": true
   },
+  "strata": {
+    "root": "",
+    "model": "",
+    "auto_start": true,
+    "port": 8080,
+    "start_timeout_s": 600,
+    "free_comfy_vram": true
+  },
   "cli_paths": { "claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms" },
   "defaults": {
     "gemini_model": "gemini-3-flash",
@@ -1263,6 +1346,7 @@ LM Studio가 꺼져 있으면 `(auto)`만 보입니다. **LM Studio를 켠 뒤 �
     `append` 모드에서는 기본 프롬프트가 강해서 "영어로만 답해" 같은 지시가 희석되는 것을 실측으로 확인했습니다.
 - `lmstudio.ttl_sec` / `lmstudio.unload_after`: **노드 위젯의 기본값**이 됩니다. 개별 실행은 위젯 값이 우선합니다.
 - `openai_compat.unload_after`(기본 `false`): `unload_after_generation` 위젯의 기본값입니다.
+- `strata.root`: Strata 폴더. 적어 두면 서버가 꺼져 있을 때 실행 버튼이 `serve/server.py` 를 띄웁니다. `strata.model` 은 아무것도 안 골랐을 때 띄울 `strata-<모델>.json` 의 `<모델>` 입니다(비우면 가장 최근에 쓴 것). [Strata](#strata-1) 참고.
 - `cli_paths.lms`: LM Studio CLI 경로. REST 언로드가 없는 0.4 미만 LM Studio 에서만 필요합니다.
 - `allow_unsafe_extra_args`(기본 `false`): `extra_args`로 읽기 전용 잠금을 푸는 위험 플래그(`--dangerously-*`, `--allowedTools Bash`, `-s danger-full-access`, `--yolo` 등)를 허용할지. **기본은 차단**입니다. 꼭 필요할 때만 `true`로 여세요.
 - `api_token` 같은 비밀값은 `debug` 출력에 절대 포함되지 않습니다.
@@ -1346,7 +1430,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > `127.0.0.1` 의 1234 / 11434 / 8000 / 8080 을 두드려서, LM Studio 나 Ollama 를
 > 켜두셨다면 테스트가 실제 서버로 요청을 보내고 위젯 기본값도 머신마다 달라집니다.
 
-**539종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**581종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 

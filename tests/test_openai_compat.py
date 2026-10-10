@@ -87,6 +87,7 @@ class TestAliases(unittest.TestCase):
             "vllm": "http://127.0.0.1:8000",
             "llamacpp": "http://127.0.0.1:8080",
             "ninfer": "http://127.0.0.1:8081",
+            "strata": "http://127.0.0.1:8080",
         }
         # 목록이 늘면 여기도 늘려야 한다. 조용히 빠지지 않게 개수를 먼저 본다.
         self.assertEqual(set(expected), set(backends.OPENAI_COMPAT_ALIASES))
@@ -216,7 +217,8 @@ class TestServerModelList(unittest.TestCase):
                 mock.patch.object(self.config_mod, "load_config", return_value=cfg):
             oc_mod.list_server_models()
         self.assertNotIn("https://api.openai.com", asked)
-        self.assertEqual(sorted(asked), sorted(oc_mod.KNOWN_SERVERS.values()))
+        # llama.cpp 와 Strata 가 8080 을 같이 쓴다. 같은 포트는 한 번만 묻는다.
+        self.assertEqual(sorted(asked), sorted(set(oc_mod.KNOWN_SERVERS.values())))
 
     def test_a_local_custom_port_is_probed(self):
         asked = []
@@ -387,7 +389,8 @@ class TestNInfer(unittest.TestCase):
     def test_it_is_appended_after_every_existing_name(self):
         self.assertEqual(
             backends.BACKEND_NAMES,
-            ["lmstudio", "claude", "codex", "gemini", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer"],
+            ["lmstudio", "claude", "codex", "gemini", "openai_compat", "ollama", "vllm", "llamacpp", "ninfer",
+             "strata"],
         )
 
     def test_unload_tells_the_truth_about_ninfer(self):

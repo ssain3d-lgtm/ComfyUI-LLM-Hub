@@ -65,6 +65,22 @@ DEFAULTS = {
         # 띄우기 전에 ComfyUI 가 캐시해 둔 모델을 VRAM 에서 내린다. 끄면 사전 점검에 걸릴 때만 내린다.
         "free_comfy_vram": True,
     },
+    # strata 백엔드 전용. Strata(serve/server.py)에는 /load /unload 가 있어서 그걸 부르고, 서버가 꺼져
+    # 있으면 root 의 serve/server.py 를 띄운다(backends/strata.py).
+    "strata": {
+        # Strata 폴더(.venv 와 strata-<모델>.json 이 있는 곳). 비우면 서버를 띄우지 않고 떠 있는 것만 쓴다.
+        "root": "",
+        # 모델을 안 골랐고 서버도 꺼져 있을 때 띄울 strata-<모델>.json 의 <모델>. 비우면 가장 최근에 쓴 것.
+        "model": "",
+        # 실행 버튼이 서버를 띄우고 모델을 올린다. 끄면 떠 있는 서버만 쓴다.
+        "auto_start": True,
+        # 관리할 Strata 포트. 노드 주소가 이 포트가 아니면 관리하지 않는다.
+        "port": 8080,
+        # 기동/적재 대기 상한(초). 모델 적재는 보통 1~3분이다.
+        "start_timeout_s": 600,
+        # 띄우거나 올리기 전에 ComfyUI 가 캐시해 둔 모델을 VRAM 에서 내린다.
+        "free_comfy_vram": True,
+    },
     "cli_paths": {"claude": "claude", "codex": "codex", "gemini": "gemini", "lms": "lms"},
     "defaults": {
         # 실측(2026-08-12, gemini-cli 0.55.1): "gemini-3-flash" 는 CLI 가

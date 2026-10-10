@@ -9,6 +9,7 @@ LM Studio 백엔드를 그대로 물려받아 base_url 만 바꾼다 -- 검증�
   vLLM       http://127.0.0.1:8000
   llama.cpp  http://127.0.0.1:8080
   NInfer     http://127.0.0.1:8081
+  Strata     http://127.0.0.1:8080  (llama.cpp 와 같은 포트 -- backends/strata.py)
 
 LM Studio 전용이라 갈라야 하는 것은 셋뿐이다.
 
@@ -20,6 +21,7 @@ LM Studio 전용이라 갈라야 하는 것은 셋뿐이다.
                  vLLM      POST /sleep?level=1  (--enable-sleep-mode + VLLM_SERVER_DEV_MODE=1)
                            → 다음 실행 전에 prepare() 가 /wake_up 으로 깨운다
                  NInfer    수단이 없다. 그렇다고 말만 한다.
+                 Strata    POST /unload (엔진만 내리고 서버는 남는다) -> strata 백엔드가 /load 로 다시 올린다
                어느 서버인지 모르는 openai_compat(표준 포트가 아닌 주소)은
                아무것도 쏘지 않고 안내만 남긴다 -- 남의 서버에 추측으로 요청하지 않는다.
   /api/v0/models : LM Studio 전용 확장이다. 모델은 노드의 model 칸에 직접 적는다.
@@ -37,6 +39,9 @@ NInfer 만 실기기로 확인했다 (2026-09-19~21, ninfer-serve, Qwen3.8-27B N
   - 언로드 API 도 유휴 언로드도 없다. 프로세스가 사는 동안 모델이 VRAM 에 상주한다 -> unload_model 참고.
   - thinking 은 기본으로 켜져 있다. 끄려면 extra_body 에 {"reasoning_effort": "none"}.
     ("/no_think" 텍스트는 효과가 없고 프롬프트만 오염시킨다. top-level enable_thinking 도 듣지 않는다 -- 실측.)
+
+Strata 도 실기기로 확인했다 (2026-10-10, 엔진 0.1.41, qwen3.8-flash-next-iq3_xxs, RTX 5090): 생성 -> /unload -> /load
+  -> 생성이 그대로 돌았고 다시 올리는 데 18초. 자세한 것은 backends/strata.py.
 """
 
 from __future__ import annotations
@@ -60,7 +65,37 @@ KNOWN_SERVERS = {
     "vllm": "http://127.0.0.1:8000",
     "llamacpp": "http://127.0.0.1:8080",
     "ninfer": "http://127.0.0.1:8081",
+    # Strata 의 기본 포트는 llama.cpp 와 같다. openai_compat 으로 8080 을 적으면 먼저 있던
+    # llama.cpp 로 본다 -- Strata 의 /load /unload 를 쓰려면 드롭다운에서 strata 를 골라야 한다.
+    "strata": "http://127.0.0.1:8080",
 }
+
+# 노드의 reasoning 드롭다운 값 -> 요청 필드. "" 는 서버 기본값(= 아무것도 안 보냄).
+# NInfer(실측 2026-09-26)와 Strata(serve/server.py)가 같은 필드를 읽는다. nodes.py 가
+# 이 두 백엔드에만 req.reasoning 을 채우므로 다른 별칭에는 아무것도 나가지 않는다.
+#   off             -> reasoning_effort: "none"
+#   on              -> chat_template_kwargs.enable_thinking: true
+#   low/medium/high -> reasoning_effort: 그 값 (템플릿이 해석한다)
+REASONING_FIELDS = {
+    "off": {"reasoning_effort": "none"},
+    "on": {"chat_template_kwargs": {"enable_thinking": True}},
+    "low": {"reasoning_effort": "low"},
+    "medium": {"reasoning_effort": "medium"},
+    "high": {"reasoning_effort": "high"},
+}
+
+
+def extra_body_sets_reasoning(extra_body) -> bool:
+    """사용자가 extra_body 로 thinking 을 직접 정했는가. 그러면 노드의 reasoning 은 물러난다
+    (둘이 어긋나면 NInfer 가 conflicting_template_option 400 을 낸다)."""
+    if not isinstance(extra_body, dict):
+        return False
+    kwargs = extra_body.get("chat_template_kwargs")
+    return (
+        "reasoning_effort" in extra_body
+        or "enable_thinking" in extra_body
+        or (isinstance(kwargs, dict) and "enable_thinking" in kwargs)
+    )
 
 
 class OpenAICompatBackend(LMStudioBackend):
@@ -117,7 +152,22 @@ class OpenAICompatBackend(LMStudioBackend):
         payload = super()._build_payload(req, messages, model)
         # LM Studio 전용 필드다. 엄격한 서버는 모르는 필드에 400 을 낸다.
         payload.pop("ttl", None)
+        fields = REASONING_FIELDS.get(req.reasoning or "")
+        if fields and not extra_body_sets_reasoning(req.extra_body):
+            for key, value in fields.items():
+                if isinstance(value, dict):
+                    payload[key] = dict(payload.get(key) or {}, **value)
+                else:
+                    payload[key] = value
         return payload
+
+    def reasoning_note(self, req: LLMRequest) -> str:
+        """debug 한 줄: 노드의 reasoning 을 보냈는지, extra_body 에 밀렸는지. 안 정했으면 빈 문자열."""
+        if req.reasoning not in REASONING_FIELDS:
+            return ""
+        if extra_body_sets_reasoning(req.extra_body):
+            return f"{self.name}: reasoning={req.reasoning} not applied - extra_body already sets it"
+        return f"{self.name}: reasoning={req.reasoning}"
 
     def server_kind(self) -> str:
         """어느 서버인지. 언로드 수단을 고르는 데 쓴다. 모르면 빈 문자열.
@@ -247,7 +297,7 @@ class OpenAICompatBackend(LMStudioBackend):
                 status=(
                     f"error: no response from the {self.name} server ({self.base_url}). "
                     "Check the address and that the server is running "
-                    "(Ollama 11434 / vLLM 8000 / llama.cpp 8080 / NInfer 8081)"
+                    "(Ollama 11434 / vLLM 8000 / llama.cpp 8080 / NInfer 8081 / Strata 8080)"
                 ),
                 duration_s=duration,
                 raw_debug=truncate_debug("\n".join(debug_notes + [repr(exc)])),
@@ -322,7 +372,8 @@ def list_server_models(timeout_s: float = 1.5) -> list:
             section.get("api_token") or os.environ.get("OPENAI_COMPAT_API_KEY", "") or ""
         ).strip()
 
-        targets = [(url, {}) for url in KNOWN_SERVERS.values()]
+        # llama.cpp 와 Strata 가 8080 을 같이 쓴다. 한 포트는 한 번만 묻는다.
+        targets = [(url, {}) for url in dict.fromkeys(KNOWN_SERVERS.values())]
         if configured and is_loopback(configured) and configured not in KNOWN_SERVERS.values():
             targets.append(
                 (configured, {"Authorization": f"Bearer {token}"} if token else {})
@@ -333,11 +384,13 @@ def list_server_models(timeout_s: float = 1.5) -> list:
                 if model_id not in ids:
                     ids.append(model_id)
 
-        # NInfer 는 꺼져 있어도 고를 수 있어야 한다 -- ninfer 백엔드가 고른 .ninfer 를 띄운다.
-        # 목록은 NInfer 설정 UI 의 모델 폴더에서 온다(backends/ninfer.py).
+        # NInfer 와 Strata 는 꺼져 있어도 고를 수 있어야 한다 -- 그 백엔드가 고른 모델로 서버를 띄운다.
+        # NInfer 는 설정 UI 의 모델 폴더에서(backends/ninfer.py), Strata 는 strata.root 의
+        # strata-<모델>.json 에서(backends/strata.py) 이름을 읽는다.
         from .ninfer import list_artifacts
+        from .strata import list_strata_models
 
-        for name in list_artifacts(timeout_s):
+        for name in list_artifacts(timeout_s) + list_strata_models():
             if name not in ids:
                 ids.append(name)
     except Exception:

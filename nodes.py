@@ -92,6 +92,8 @@ FROZEN_WIDGET_ORDERS = (
 # reasoning 드롭다운. 첫 칸이 기본값이다(= 아무것도 안 보냄).
 REASONING_DEFAULT = "(default)"
 REASONING_CHOICES = [REASONING_DEFAULT, "off", "on", "low", "medium", "high"]
+# reasoning 위젯을 읽는 백엔드. 둘 다 Qwen3.8 계열 서버라 같은 필드를 받는다(backends/openai_compat.py).
+REASONING_BACKENDS = ("ninfer", "strata")
 
 # server_model 드롭다운을 쓰는 백엔드 = openai_compat 과 그 별칭들.
 OPENAI_COMPAT_BACKENDS = ("openai_compat",) + tuple(OPENAI_COMPAT_ALIASES)
@@ -193,10 +195,11 @@ class LLMHubGenerate:
                 "backend": (BACKEND_NAMES, {
                     "tooltip": "Which LLM to use. claude/codex/gemini = subscription CLIs; "
                                "everything else talks to a local server over HTTP. "
-                               "ollama / vllm / llamacpp / ninfer are the same backend as "
+                               "ollama / vllm / llamacpp / ninfer / strata are the same backend as "
                                "openai_compat, just preset to that server's standard port "
-                               "(11434 / 8000 / 8080 / 8081) so you do not have to type it. "
-                               "Each backend must already be installed and running.",
+                               "(11434 / 8000 / 8080 / 8081 / 8080) so you do not have to type it. "
+                               "Each backend must already be installed and running (ninfer and "
+                               "strata are started by Run when they are not).",
                 }),
                 "prompt": ("STRING", {"multiline": True, "default": "",
                     "tooltip": "The user prompt. Write what you want done here."}),
@@ -306,8 +309,8 @@ class LLMHubGenerate:
                     "default": "",
                     "tooltip": "Address of the OpenAI-compatible server. Fill this in only "
                                "when the server is not at the standard port — for the "
-                               "ollama / vllm / llamacpp / ninfer backends it is already set "
-                               "(11434 / 8000 / 8080 / 8081), and for openai_compat an empty box "
+                               "ollama / vllm / llamacpp / ninfer / strata backends it is already set "
+                               "(11434 / 8000 / 8080 / 8081 / 8080), and for openai_compat an empty box "
                                "uses openai_compat.base_url from config.json. "
                                "Leave '/v1' off the end; the node appends "
                                "/v1/chat/completions itself."}),
@@ -338,14 +341,15 @@ class LLMHubGenerate:
                                "by the node and cannot be overridden."}),
                 # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
                 "server_model": ([AUTO_MODEL] + list_server_models(), {
-                    "tooltip": "[openai_compat/ollama/vllm/llamacpp/ninfer] Model dropdown, read "
+                    "tooltip": "[openai_compat/ollama/vllm/llamacpp/ninfer/strata] Model dropdown, read "
                                "from whichever of those servers is running on this machine. "
                                "Start the server, then press the refresh button on the title "
                                "bar. (auto) = follow the model field above. Only local "
                                "servers are listed — for a remote or paid endpoint, type the "
                                "name into model instead. ninfer: the .ninfer models of the "
                                "NInfer config UI are listed even while the server is off — "
-                               "pick one and Run starts NInfer with it."}),
+                               "pick one and Run starts NInfer with it. strata: the models of "
+                               "the strata-<model>.json files in strata.root, the same way."}),
                 # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
                 #
                 # lmstudio_unload_after 의 OpenAI 호환 서버판. 이름을 따로 둔 이유:
@@ -353,14 +357,16 @@ class LLMHubGenerate:
                 # 수단이 달라서(없는 서버도 있다) 기본값도 달라야 한다.
                 "unload_after_generation": ("BOOLEAN", {
                     "default": _ls_default("unload_after", False, section="openai_compat"),
-                    "tooltip": "[openai_compat/ollama/vllm/llamacpp/ninfer] Load the model, "
+                    "tooltip": "[openai_compat/ollama/vllm/llamacpp/ninfer/strata] Load the model, "
                                "generate, then unload it right away so the VRAM is free for "
                                "the image model. The model is loaded again on the next run. "
                                "Ollama: keep_alive 0. llama.cpp: router mode only "
                                "(/models/unload). vLLM: sleep mode (needs --enable-sleep-mode "
                                "and VLLM_SERVER_DEV_MODE=1; woken up before the next run). "
                                "NInfer: the server is started on Run and stopped after the "
-                               "answer (through the NInfer config UI). What happened is "
+                               "answer (through the NInfer config UI). Strata: POST /unload "
+                               "frees the VRAM and RAM, the server stays up and the next run "
+                               "loads the model again (POST /load). What happened is "
                                "written to debug."}),
                 # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
                 #
@@ -374,11 +380,12 @@ class LLMHubGenerate:
                                "different context it is restarted. 0 = use whatever is running, "
                                "or the profile's value when starting."}),
                 "reasoning": (REASONING_CHOICES, {
-                    "tooltip": "[ninfer] Thinking for this request. off = no reasoning (fastest; "
+                    "tooltip": "[ninfer/strata] Thinking for this request. off = no reasoning (fastest; "
                                "sends reasoning_effort none). on = reasoning on. low / medium / "
                                "high = reasoning_effort for the model's template. (default) = "
-                               "the server's default (on for Qwen3.8). A reasoning_effort or "
-                               "enable_thinking you put in extra_body wins over this."}),
+                               "the server's default (on for Qwen3.8; high on Strata). A "
+                               "reasoning_effort or enable_thinking you put in extra_body wins "
+                               "over this."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -612,12 +619,13 @@ class LLMHubGenerate:
                     extra_args=_as_text(extra_args),
                     extra_body=extra_body_dict,
                     base_url_override=_as_text(openai_base_url),
-                    # ninfer 전용 둘. 다른 백엔드에는 넘기지 않는다(화면에도 안 보인다).
+                    # ninfer_context 는 ninfer 전용, reasoning 은 ninfer/strata. 다른 백엔드에는 넘기지
+                    # 않는다(화면에도 안 보인다).
                     ninfer_context=(
                         max(0, _as_number(ninfer_context, 0)) if backend == "ninfer" else 0
                     ),
                     reasoning=(
-                        _as_text(reasoning) if backend == "ninfer"
+                        _as_text(reasoning) if backend in REASONING_BACKENDS
                         and _as_text(reasoning) in REASONING_CHOICES[1:] else ""
                     ),
                     # lmstudio_ttl_sec 도 LM Studio 전용이다(위의 unload_wanted

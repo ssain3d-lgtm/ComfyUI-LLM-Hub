@@ -14,7 +14,9 @@ from .base import BaseBackend, LLMRequest, LLMResponse
 # ninfer 는 NInfer(`ninfer-serve`)다. 다른 셋과 달리 실기기로 확인했다 -- backends/openai_compat.py 참고.
 # NInfer 에는 모델 올리기/내리기 API 가 없어서, ninfer 만은 NInfer 설정 UI 를 통해 서버 프로세스 자체를
 # 켜고 끄는 하위 클래스(backends/ninfer.py)를 쓴다.
-OPENAI_COMPAT_ALIASES = ("ollama", "vllm", "llamacpp", "ninfer")
+# strata 는 Strata(Qwen3.8-Flash-Next 를 PC 한 대에서 돌리는 엔진)다. 서버에 /load /unload 가 있어서
+# 그걸 부르고, 서버가 꺼져 있으면 띄우는 하위 클래스(backends/strata.py)를 쓴다.
+OPENAI_COMPAT_ALIASES = ("ollama", "vllm", "llamacpp", "ninfer", "strata")
 
 # 새 이름은 반드시 "맨 뒤에만" 붙인다. 저장된 워크플로우가 콤보를 어떻게 들고
 # 있든(문자열이든 인덱스든) 뒤에 붙이는 것은 안전하지만, 중간에 끼우거나 순서를
@@ -23,6 +25,7 @@ BACKEND_NAMES = [
     "lmstudio", "claude", "codex", "gemini", "openai_compat",
     "ollama", "vllm", "llamacpp",
     "ninfer",
+    "strata",
 ]
 
 
@@ -46,6 +49,10 @@ def get_backend(name: str) -> BaseBackend:
         from .ninfer import NInferBackend
 
         return NInferBackend()
+    if key == "strata":
+        from .strata import StrataBackend
+
+        return StrataBackend()
     if key == "openai_compat" or key in OPENAI_COMPAT_ALIASES:
         from .openai_compat import KNOWN_SERVERS, OpenAICompatBackend
 
