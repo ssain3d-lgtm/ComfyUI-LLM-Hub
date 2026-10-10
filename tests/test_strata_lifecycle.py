@@ -4,7 +4,7 @@
 Strata(serve/server.py)에는 모델을 올리고 내리는 API 가 있다. 그래서 NInfer 와 달리 언로드는 엔진만
 내리고 서버 프로세스는 남긴다. 서버가 아예 꺼져 있을 때만 strata.root 의 serve/server.py 를 띄운다.
 
-실제 서버 없이 돈다. 가짜 서버가 /health, /load, /unload, /v1/* 를 흉내내고, 프로세스 기동은 가짜 Popen 이
+실제 서버 없이 돈다. 가짜 서버가 /health, /load, /unload, /settings, /metrics, /v1/* 를 흉내내고, 프로세스 기동은 가짜 Popen 이
 "두 번째 확인부터 서버가 답한다" 로 흉내낸다. 포트 8080 의 진짜 Strata 에는 아무것도 보내지 않는다.
 """
 
@@ -58,17 +58,33 @@ def make_root(folder, newest="iq3_xxs"):
 class FakeStrata:
     """Strata 서버. up=False 면 연결을 그냥 끊어 꺼진 서버처럼 군다(요청은 그래도 기록한다)."""
 
-    def __init__(self, up=True, loaded=True, model=A, service="strata", load_ok=True, busy=False):
+    def __init__(self, up=True, loaded=True, model=A, service="strata", load_ok=True, busy=False,
+                 shared=None, cvec=1, settings_ok=True):
         self.up, self.loaded, self.model, self.service = up, loaded, model, service
         self.load_ok, self.busy = load_ok, busy
+        self.shared = dict(shared or {})       # 공유 설정 (POST /settings 가 바꾼다)
+        self.cvec = cvec                       # /metrics 의 engine.cvec: 0 = 제어 벡터 없이 뜬 서버
+        self.settings_ok = settings_ok
         self.calls = []
         self.freed = 0
 
     def posts(self):
         return [p for m, p, _ in self.calls if m == "POST"]
 
-    def handle(self, method, path, body):
+    def handle(self, method, path, body, headers=None):
         self.calls.append((method, path, body))
+        headers = headers or {}
+        if path == "/metrics":
+            return 200, {"engine": {"cvec": self.cvec}}
+        if path == "/settings":
+            if method == "POST":
+                # 진짜 서버의 _own_page: JSON 이어야 하고, 다른 사이트의 Origin 이 붙어 있으면 403
+                if not headers.get("Content-Type", "").startswith("application/json"):
+                    return 415, {"error": {"message": "send application/json"}}
+                if not self.settings_ok or headers.get("Origin"):
+                    return 403, {"error": {"message": "settings can be changed only from Strata's own page"}}
+                self.shared = dict(body["defaults"])
+            return 200, {"shared": bool(self.shared), "defaults": self.shared}
         if path == "/health":
             if self.service != "strata":
                 return 200, {"status": "ok"}  # llama.cpp 의 /health
@@ -106,7 +122,7 @@ class FakeStrata:
                     outer.calls.append((method, self.path, None))
                     self.close_connection = True
                     return  # 응답 없이 끊는다 -> 클라이언트는 ConnectionError
-                code, payload = outer.handle(method, self.path, json.loads(raw) if raw else None)
+                code, payload = outer.handle(method, self.path, json.loads(raw) if raw else None, dict(self.headers))
                 data = json.dumps(payload).encode("utf-8")
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
@@ -206,8 +222,9 @@ class FakeStrata:
         return mock.patch.object(strata_mod.subprocess, "Popen", FakePopen), spawned
 
 
-def _req(model="", unload=False, reasoning=""):
-    return LLMRequest("strata", model, "", "hi", unload_after=unload, timeout_s=5, reasoning=reasoning)
+def _req(model="", unload=False, reasoning="", content_mode=""):
+    return LLMRequest("strata", model, "", "hi", unload_after=unload, timeout_s=5, reasoning=reasoning,
+                      content_mode=content_mode)
 
 
 class TestRegistration(unittest.TestCase):
@@ -494,6 +511,60 @@ class TestReasoning(unittest.TestCase):
             self.assertNotIn("chat_template_kwargs", payload, name)
 
 
+class TestContentMode(unittest.TestCase):
+    """content_mode 의 NSFW / SFW 는 NInfer 설정 UI 의 "거부 성향 완화 (실험)" 스위치와 같은 길이다:
+    Strata 의 공유 설정 experimental_speed_projection 을 POST /settings 로 바꾼다. 재시작 없이, 모든 클라이언트에."""
+
+    def _run(self, mode, **server):
+        with FakeStrata(**server) as srv:
+            resp = srv.backend().generate(_req(A, content_mode=mode))
+        return srv, resp
+
+    def test_nsfw_turns_the_shared_switch_on_before_generating(self):
+        srv, resp = self._run("NSFW", shared={"temperature": 0.5})
+        # POST /settings 는 defaults 전체를 바꾸므로 다른 공유 값은 그대로 다시 보낸다
+        self.assertEqual(srv.shared, {"temperature": 0.5, "experimental_speed_projection": True})
+        self.assertLess(srv.posts().index("/settings"), srv.posts().index(CHAT))
+        self.assertEqual(resp.status, "ok")
+        self.assertIn("strata: content_mode=NSFW", resp.raw_debug)
+
+    def test_sfw_turns_it_off(self):
+        srv, resp = self._run("SFW", shared={"experimental_speed_projection": True})
+        self.assertIs(srv.shared["experimental_speed_projection"], False)
+        self.assertIn("strata: content_mode=SFW", resp.raw_debug)
+
+    def test_default_leaves_the_switch_alone(self):
+        srv, resp = self._run("", shared={"experimental_speed_projection": True})
+        self.assertNotIn("/settings", [p for _m, p, _b in srv.calls])
+        self.assertNotIn("content_mode", resp.raw_debug)
+
+    def test_a_switch_already_in_that_position_is_not_posted_again(self):
+        srv, resp = self._run("NSFW", shared={"experimental_speed_projection": True})
+        self.assertNotIn("/settings", srv.posts())
+        self.assertIn("strata: content_mode=NSFW", resp.raw_debug)
+
+    def test_without_the_vector_it_is_saved_for_the_next_start(self):
+        """벡터 없이 뜬 서버: 설정 UI 의 스위치처럼 저장은 되고, 다음에 벡터를 불러올 때 그 값으로 시작한다."""
+        srv, resp = self._run("NSFW", cvec=0)
+        self.assertIs(srv.shared["experimental_speed_projection"], True)
+        self.assertEqual(resp.status, "ok")
+        self.assertIn("next start", resp.raw_debug)
+        self.assertIn("config UI", resp.raw_debug)
+
+    def test_a_refused_switch_is_an_error_with_the_servers_reason(self):
+        srv, resp = self._run("NSFW", settings_ok=False)
+        self.assertTrue(resp.status.startswith("error: strata - could not switch to NSFW"), resp.status)
+        self.assertIn("own page", resp.status)
+        self.assertNotIn(CHAT, [p for _m, p, _b in srv.calls])
+
+    def test_the_switch_goes_to_an_unmanaged_address_too(self):
+        """언로드처럼: 드롭다운에서 strata 를 골랐다는 것이 그 주소가 Strata 라는 뜻이다."""
+        with FakeStrata() as srv:
+            resp = srv.backend(auto_start=False).generate(_req(A, content_mode="NSFW"))
+        self.assertIs(srv.shared["experimental_speed_projection"], True)
+        self.assertEqual(resp.status, "ok")
+
+
 class TestDropdown(unittest.TestCase):
     def test_configs_are_listed_newest_first_while_the_server_is_off(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -520,7 +591,7 @@ class TestDropdown(unittest.TestCase):
 
 
 class TestNodeInputs(unittest.TestCase):
-    """노드의 reasoning 은 ninfer 와 strata 에 넘어간다. ninfer_context 는 여전히 ninfer 에만."""
+    """노드의 reasoning 은 ninfer 와 strata 에, content_mode 는 strata 에만 넘어간다. ninfer_context 는 여전히 ninfer 에만."""
 
     def _run(self, backend, **kwargs):
         seen = []
@@ -545,9 +616,17 @@ class TestNodeInputs(unittest.TestCase):
         req = self._run("strata", server_model=B)
         self.assertEqual(req.model, B)
 
-    def test_no_new_widget_was_added(self):
-        """strata 는 기존 위젯만 쓴다. 저장된 워크플로우의 widgets_values 자리가 그대로다."""
-        self.assertEqual(nodes_mod.WIDGET_ORDER[-2:], ["ninfer_context", "reasoning"])
+    def test_content_mode_reaches_strata_only(self):
+        self.assertEqual(self._run("strata", content_mode="NSFW").content_mode, "NSFW")
+        self.assertEqual(self._run("ninfer", content_mode="NSFW").content_mode, "")
+
+    def test_the_default_choice_and_junk_mean_nothing(self):
+        self.assertEqual(self._run("strata", content_mode=nodes_mod.CONTENT_MODE_DEFAULT).content_mode, "")
+        self.assertEqual(self._run("strata", content_mode=True).content_mode, "")
+
+    def test_content_mode_is_the_last_widget(self):
+        """저장된 워크플로우의 widgets_values 자리가 그대로다: 새 위젯은 맨 뒤에만 붙인다."""
+        self.assertEqual(nodes_mod.WIDGET_ORDER[-3:], ["ninfer_context", "reasoning", "content_mode"])
 
 
 if __name__ == "__main__":

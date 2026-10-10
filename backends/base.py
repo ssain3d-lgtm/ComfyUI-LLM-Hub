@@ -51,6 +51,8 @@ class LLMRequest:
     ninfer_context: int = 0
     # ninfer 전용. "" = 서버 기본값, off / on / low / medium / high.
     reasoning: str = ""
+    # strata 전용. "" = Strata 의 스위치 그대로, SFW / NSFW = 거부 성향 완화 제어 벡터 끔 / 켬.
+    content_mode: str = ""
     # 실시간 모니터링용 StreamEmitter (없으면 스트리밍하지 않는다)
     emitter: object = None
 

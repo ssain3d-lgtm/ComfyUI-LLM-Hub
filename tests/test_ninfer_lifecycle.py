@@ -478,7 +478,8 @@ class TestNodeInputs(unittest.TestCase):
         self.assertEqual((req.ninfer_context, req.reasoning), (0, ""))
 
     def test_widgets_are_appended_at_the_end(self):
-        self.assertEqual(nodes_mod.WIDGET_ORDER[-2:], ["ninfer_context", "reasoning"])
+        # 그 뒤로 strata 전용 content_mode 가 하나 더 붙었다.
+        self.assertEqual(nodes_mod.WIDGET_ORDER[-3:-1], ["ninfer_context", "reasoning"])
 
 
 if __name__ == "__main__":

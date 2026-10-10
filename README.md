@@ -242,6 +242,14 @@ and stops with a clear error when something else answers there. What is differen
 - **Thinking is on by default (`high`)**, streamed as `reasoning_content`, and it counts against `max_tokens`. The
   **`reasoning`** widget works as on NInfer: `off` sends `reasoning_effort: "none"`, `low` / `medium` / `high` that level, `on`
   `chat_template_kwargs.enable_thinking: true`, `(default)` nothing — then Strata's own Chat settings decide.
+- **`content_mode` is the refusal-reduction switch.** `NSFW` sets `experimental_speed_projection: true` in Strata's shared
+  Chat settings (`POST /settings`; the other shared values are read first and sent back unchanged), `SFW` sets it `false`,
+  `(default)` leaves it alone. It is the same switch as the "Refusal reduction (experimental)" card in the NInfer config UI's
+  Strata tab: no restart, it applies at once to every client (Qwen Code too) and Strata keeps it in
+  `strata-<model>.shared-settings.json` for the next start. The vector itself (HuiHui, 484 KB) is installed from that card;
+  on a Strata that started without it the choice is only saved for the next start, and `debug` and the monitor say so.
+  A switch already in that position is not posted again. Reducing refusals weakens the model's safeguards; what it
+  writes is your responsibility.
 - **Any `model` name is accepted**; the answer carries the server's name (`model_name` in `strata-<model>.json`, for example
   `qwen3.8-flash-next-iq3_xxs`). `seed`, tools (`file_access`), images (a config started with `--vision`) and `extra_body` work.
   A prompt plus `max_tokens` longer than the context is refused with 400 unless the config has `"fit_max_tokens": true`.
@@ -276,6 +284,7 @@ and stops with a clear error when something else answers there. What is differen
 | `unload_after_generation` | Same for `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata`: load → generate → unload right away (off by default; on `ninfer` it stops the server, on `strata` it sends `POST /unload`). See §2-1 |
 | `ninfer_context` | `ninfer` only: context NInfer starts with (`max-context` and `kv-capacity`), this start only. `0` = what is running / the profile. See [NInfer](#ninfer) |
 | `reasoning` | `ninfer` / `strata` only: thinking for this request — `(default)` / `off` / `on` / `low` / `medium` / `high`. See [NInfer](#ninfer) and [Strata](#strata) |
+| `content_mode` | `strata` only: `(default)` / `SFW` / `NSFW`. `NSFW` turns Strata's refusal-reduction control vector on and `SFW` off — the same switch as the "Refusal reduction (experimental)" card in the NInfer config UI, applied at once to every client and kept for the next start. See [Strata](#strata) |
 | `openai_base_url` | Server address. Only needed when the server is **not** on its standard port (`openai_compat` and its `ollama`/`vllm`/`llamacpp`/`ninfer`/`strata` presets) |
 | `system_preset` | Load a saved system prompt into the `system_prompt` box. See §3-1 |
 | `seed` | Busts ComfyUI's cache so the same prompt runs again. On `lmstudio` / `openai_compat` a **non-zero** value is also sent to the server as the sampling seed; `0` sends nothing. The three CLIs have no seed flag |
@@ -700,7 +709,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > or Ollama running, the tests talk to your real server and widget defaults differ
 > per machine.
 
-**581 tests, all passing on Linux and Windows.** Both platforms run in CI on every
+**590 tests, all passing on Linux and Windows.** Both platforms run in CI on every
 pull request, so the badge on a PR is the real answer — Linux on Python 3.10 and 3.12,
 Windows on 3.12.
 
@@ -973,6 +982,12 @@ OpenAI API 를 **8080 포트 — llama.cpp 와 같은 포트** 에 내므로, �
 - **thinking 이 기본으로 켜져 있고(`high`)**, `reasoning_content` 로 스트리밍되며 `max_tokens` 에 포함됩니다. **`reasoning`** 위젯은
   NInfer 와 같이 듣습니다: `off` 는 `reasoning_effort: "none"`, `low` / `medium` / `high` 는 그 단계, `on` 은
   `chat_template_kwargs.enable_thinking: true`, `(default)` 는 아무것도 안 보냅니다 — 그러면 Strata 의 채팅 설정이 정합니다.
+- **`content_mode` 는 거부 성향 완화 스위치입니다.** `NSFW` 는 Strata 의 공유 채팅 설정(`POST /settings`; 다른 공유 값은 먼저 읽어
+  그대로 다시 보냅니다)에 `experimental_speed_projection: true` 를, `SFW` 는 `false` 를 쓰고, `(default)` 는 건드리지 않습니다.
+  NInfer 설정 UI 의 Strata 탭에 있는 "거부 성향 완화 (실험)" 카드와 같은 스위치입니다: 재시작 없이 모든 클라이언트(Qwen Code 포함)에
+  바로 적용되고, Strata 가 `strata-<모델>.shared-settings.json` 에 남겨 다음 시작에도 유지합니다. 벡터 자체(HuiHui, 484 KB)는 그
+  카드로 설치합니다. 벡터 없이 뜬 Strata 에서는 다음 시작용으로 저장만 되고, `debug` 와 모니터가 그렇다고 말합니다. 이미 그 자리에
+  있는 스위치는 다시 보내지 않습니다. 거부를 줄이면 모델의 안전장치도 약해지고, 결과는 사용자 책임입니다.
 - **`model` 은 아무 이름이나 받습니다.** 답에는 서버의 이름(`strata-<모델>.json` 의 `model_name`, 예: `qwen3.8-flash-next-iq3_xxs`)이
   실립니다. `seed`, 도구(`file_access`), 이미지(`--vision` 으로 띄운 설정), `extra_body` 가 됩니다. 입력 + `max_tokens` 가 컨텍스트보다
   길면 400 으로 거절합니다(설정에 `"fit_max_tokens": true` 가 있으면 줄여서 받습니다).
@@ -1008,6 +1023,7 @@ OpenAI API 를 **8080 포트 — llama.cpp 와 같은 포트** 에 내므로, �
 | `unload_after_generation` | `openai_compat` / `ollama` / `vllm` / `llamacpp` / `ninfer` / `strata` 용: 올리기 → 생성 → 즉시 내리기 (기본 꺼짐. `ninfer` 는 서버를 중지, `strata` 는 `POST /unload`). §2-1 참고 |
 | `ninfer_context` | `ninfer` 전용: NInfer 를 띄울 컨텍스트(`max-context`·`kv-capacity`), 그 기동에만. `0` = 떠 있는 것 / 프로필 값. [NInfer](#ninfer-1) 참고 |
 | `reasoning` | `ninfer` / `strata` 전용: 이 요청의 thinking — `(default)` / `off` / `on` / `low` / `medium` / `high`. [NInfer](#ninfer-1) · [Strata](#strata-1) 참고 |
+| `content_mode` | `strata` 전용: `(default)` / `SFW` / `NSFW`. `NSFW` 는 Strata 의 거부 성향 완화 제어 벡터를 켜고 `SFW` 는 끕니다 — NInfer 설정 UI 의 "거부 성향 완화 (실험)" 카드와 같은 스위치로, 모든 클라이언트에 바로 적용되고 다음 시작에도 유지됩니다. [Strata](#strata-1) 참고 |
 | `openai_base_url` | 서버 주소. 표준 포트가 **아닐 때만** 채우면 됩니다 (`openai_compat` 과 `ollama`/`vllm`/`llamacpp`/`ninfer`/`strata` 프리셋용) |
 | `system_preset` | 저장해둔 시스템 프롬프트를 `system_prompt` 칸으로 불러옵니다. §3-1 참조 |
 | `seed` | ComfyUI 캐시를 무효화해 같은 프롬프트를 다시 돌리게 합니다. `lmstudio` / `openai_compat` 에서는 **0이 아닌 값**이면 샘플링 시드로 서버에도 함께 보냅니다(0이면 안 보냅니다). CLI 3종에는 시드 플래그가 없습니다 |
@@ -1430,7 +1446,7 @@ python -m unittest discover -s tests -t . -p "test_*.py"
 > `127.0.0.1` 의 1234 / 11434 / 8000 / 8080 을 두드려서, LM Studio 나 Ollama 를
 > 켜두셨다면 테스트가 실제 서버로 요청을 보내고 위젯 기본값도 머신마다 달라집니다.
 
-**581종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
+**590종이며 리눅스와 Windows 양쪽에서 전부 통과합니다.** PR 마다 CI 가 두 플랫폼을
 모두 돌리므로 PR 화면의 초록/빨강이 실제 답입니다 — 리눅스는 Python 3.10 · 3.12,
 Windows 는 3.12.
 
