@@ -21,6 +21,14 @@
     "start_timeout_s": 600,
     "free_comfy_vram": true
   },
+  "strata": {
+    "root": "",
+    "model": "",
+    "auto_start": true,
+    "port": 8080,
+    "start_timeout_s": 600,
+    "free_comfy_vram": true
+  },
   "cli_paths": {
     "claude": "claude",
     "codex": "codex",

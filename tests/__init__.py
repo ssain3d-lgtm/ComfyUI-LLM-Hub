@@ -23,3 +23,7 @@ os.environ.setdefault("LLMHUB_SKIP_MODEL_PROBE", "1")
 # 진짜 서버를 끄거나 켜면 안 되므로 설정 UI 주소를 죽은 포트로 돌려 둔다.
 # 관리 흐름을 검증하는 테스트는 가짜 설정 UI 를 직접 넘긴다(test_ninfer_lifecycle.py).
 os.environ.setdefault("LLMHUB_NINFER_CONFIG_UI_URL", "http://127.0.0.1:1")
+# strata 백엔드는 strata.root 의 serve/server.py 를 띄울 수 있다. 개발 PC 의 config.json 에 적힌 폴더를
+# 테스트가 읽어 진짜 Strata 를 띄우면 안 되므로 빈 값으로 덮는다. 기동 흐름을 검증하는 테스트는
+# 가짜 폴더를 이 변수로 직접 넘긴다(test_strata_lifecycle.py).
+os.environ.setdefault("LLMHUB_STRATA_ROOT", "")

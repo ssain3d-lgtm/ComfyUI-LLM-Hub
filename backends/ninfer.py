@@ -33,10 +33,8 @@ kv-capacity 를 이번 기동에만 넘긴다 -- 설정 UI 에 저장된 프로�
 실측: 30000 이면 런타임 2.18 GiB(220K 는 8.38 GiB), 기동 직후 여유 5.95 GiB.
 입력 + max_tokens 가 컨텍스트를 넘어도 NInfer 는 거절하지 않고 남은 칸만큼만 출력한다(실측).
 
-노드의 reasoning 은 요청마다 thinking 을 정한다(서버 기동과 무관). NInfer serving.md 와 실측 기준:
-  off             -> reasoning_effort: "none"
-  on              -> chat_template_kwargs.enable_thinking: true
-  low/medium/high -> reasoning_effort: 그 값 (템플릿이 해석한다)
+노드의 reasoning 은 요청마다 thinking 을 정한다(서버 기동과 무관). 보내는 필드는 Strata 와 같아서
+backends/openai_compat.py 의 REASONING_FIELDS 에 있다 (NInfer serving.md 와 실측으로 확인한 값이다).
 extra_body 에 사용자가 직접 적은 reasoning_effort / enable_thinking 이 있으면 그쪽이 이긴다
 (둘이 어긋나면 NInfer 가 conflicting_template_option 400 을 낸다).
 
@@ -81,15 +79,6 @@ CONFIG_UI_BOOT_S = 20
 _LAST_ARTIFACT = {"name": ""}
 
 _GIB = 1024 ** 3
-
-# 노드의 reasoning 드롭다운 값 -> 요청 필드. "" 는 서버 기본값(= 아무것도 안 보냄).
-REASONING_FIELDS = {
-    "off": {"reasoning_effort": "none"},
-    "on": {"chat_template_kwargs": {"enable_thinking": True}},
-    "low": {"reasoning_effort": "low"},
-    "medium": {"reasoning_effort": "medium"},
-    "high": {"reasoning_effort": "high"},
-}
 
 
 class NInferBackend(OpenAICompatBackend):
@@ -204,24 +193,11 @@ class NInferBackend(OpenAICompatBackend):
 
     # -- 생성 -----------------------------------------------------------------
 
-    def _build_payload(self, req: LLMRequest, messages: list, model: str) -> dict:
-        payload = super()._build_payload(req, messages, model)
-        fields = REASONING_FIELDS.get(req.reasoning or "")
-        if fields and not _extra_body_sets_reasoning(req.extra_body):
-            for key, value in fields.items():
-                if isinstance(value, dict):
-                    payload[key] = dict(payload.get(key) or {}, **value)
-                else:
-                    payload[key] = value
-        return payload
-
     def _generate(self, req: LLMRequest) -> LLMResponse:
         notes: list = []
-        if req.reasoning in REASONING_FIELDS:
-            if _extra_body_sets_reasoning(req.extra_body):
-                notes.append(f"ninfer: reasoning={req.reasoning} not applied - extra_body already sets it")
-            else:
-                notes.append(f"ninfer: reasoning={req.reasoning}")
+        note = self.reasoning_note(req)
+        if note:
+            notes.append(note)
         if not self.managed():
             if req.ninfer_context:
                 notes.append(
@@ -456,18 +432,6 @@ def free_comfy_vram() -> bool:
         return True
     except Exception:
         return False
-
-
-def _extra_body_sets_reasoning(extra_body) -> bool:
-    """사용자가 extra_body 로 thinking 을 직접 정했는가. 그러면 노드의 reasoning 은 물러난다."""
-    if not isinstance(extra_body, dict):
-        return False
-    kwargs = extra_body.get("chat_template_kwargs")
-    return (
-        "reasoning_effort" in extra_body
-        or "enable_thinking" in extra_body
-        or (isinstance(kwargs, dict) and "enable_thinking" in kwargs)
-    )
 
 
 def _running_context(state: dict) -> int:

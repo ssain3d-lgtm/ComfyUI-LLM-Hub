@@ -13,3 +13,6 @@ lm_studio_token.txt
 
 # 프리셋 백업 파일. 저장소에 들어갈 물건이 아니다.
 system_prompts.json.bak-*
+
+# strata 백엔드가 띄운 Strata 서버의 출력. 노드가 쓴 것이라 노드 옆에 둔다.
+strata-server.log
