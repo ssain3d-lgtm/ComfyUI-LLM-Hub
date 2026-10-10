@@ -39,7 +39,7 @@ WIDGET_ORDER = [
     "video_path", "mcp_config", "extra_args",
     "lmstudio_model", "lmstudio_ttl_sec", "lmstudio_unload_after", "claude_model",
     "openai_base_url", "system_preset", "batch_mode", "extra_body", "server_model",
-    "unload_after_generation", "ninfer_context", "reasoning",
+    "unload_after_generation", "ninfer_context", "reasoning", "content_mode",
 ]
 
 # 릴리스별로 "그때 배포된 순서" 를 그대로 박아둔 원장.
@@ -94,6 +94,11 @@ REASONING_DEFAULT = "(default)"
 REASONING_CHOICES = [REASONING_DEFAULT, "off", "on", "low", "medium", "high"]
 # reasoning 위젯을 읽는 백엔드. 둘 다 Qwen3.8 계열 서버라 같은 필드를 받는다(backends/openai_compat.py).
 REASONING_BACKENDS = ("ninfer", "strata")
+
+# content_mode 드롭다운. 첫 칸이 기본값이다(= Strata 의 스위치를 건드리지 않는다). NSFW 는 거부 성향 완화
+# 제어 벡터를 켜고 SFW 는 끈다 -- NInfer 설정 UI 의 "거부 성향 완화 (실험)" 스위치와 같은 공유 설정이다(backends/strata.py).
+CONTENT_MODE_DEFAULT = "(default)"
+CONTENT_MODE_CHOICES = [CONTENT_MODE_DEFAULT, "SFW", "NSFW"]
 
 # server_model 드롭다운을 쓰는 백엔드 = openai_compat 과 그 별칭들.
 OPENAI_COMPAT_BACKENDS = ("openai_compat",) + tuple(OPENAI_COMPAT_ALIASES)
@@ -386,6 +391,17 @@ class LLMHubGenerate:
                                "the server's default (on for Qwen3.8; high on Strata). A "
                                "reasoning_effort or enable_thinking you put in extra_body wins "
                                "over this."}),
+                # --- 나중에 추가된 위젯 (반드시 맨 뒤에 붙인다) ---
+                #
+                # strata 전용. Strata 의 공유 설정(거부 성향 완화 제어 벡터)을 바꾼다.
+                "content_mode": (CONTENT_MODE_CHOICES, {
+                    "tooltip": "[strata] NSFW turns Strata's refusal-reduction control vector on, SFW "
+                               "turns it off — the same switch as the 'Refusal reduction (experimental)' "
+                               "card in the NInfer config UI's Strata tab: no restart, it applies at once "
+                               "to every client (Qwen Code too) and is kept for the next start. The "
+                               "vector is installed from that card; on a Strata that started without it "
+                               "the choice is only saved for the next start, and debug says so. "
+                               "(default) = leave the switch as it is."}),
             },
             # 모니터링 창이 어느 노드에 그려질지 알기 위해 노드 id 를 받는다.
             "hidden": {"unique_id": "UNIQUE_ID"},
@@ -444,6 +460,7 @@ class LLMHubGenerate:
         unload_after_generation=False,
         ninfer_context=0,
         reasoning=REASONING_DEFAULT,
+        content_mode=CONTENT_MODE_DEFAULT,
         unique_id=None,
     ):
         # 노드는 어떤 경우에도 예외를 밖으로 던지지 않는다 (DESIGN N4, §5-3).
@@ -619,14 +636,18 @@ class LLMHubGenerate:
                     extra_args=_as_text(extra_args),
                     extra_body=extra_body_dict,
                     base_url_override=_as_text(openai_base_url),
-                    # ninfer_context 는 ninfer 전용, reasoning 은 ninfer/strata. 다른 백엔드에는 넘기지
-                    # 않는다(화면에도 안 보인다).
+                    # ninfer_context 는 ninfer 전용, reasoning 은 ninfer/strata, content_mode 는 strata 전용.
+                    # 다른 백엔드에는 넘기지 않는다(화면에도 안 보인다).
                     ninfer_context=(
                         max(0, _as_number(ninfer_context, 0)) if backend == "ninfer" else 0
                     ),
                     reasoning=(
                         _as_text(reasoning) if backend in REASONING_BACKENDS
                         and _as_text(reasoning) in REASONING_CHOICES[1:] else ""
+                    ),
+                    content_mode=(
+                        _as_text(content_mode) if backend == "strata"
+                        and _as_text(content_mode) in CONTENT_MODE_CHOICES[1:] else ""
                     ),
                     # lmstudio_ttl_sec 도 LM Studio 전용이다(위의 unload_wanted
                     # 주석 참고). None 을 주면 각 백엔드가 자기 설정을 따른다.

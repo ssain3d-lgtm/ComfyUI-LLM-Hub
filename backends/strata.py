@@ -25,6 +25,14 @@ NInfer 와 달리 서버 자체에 모델을 올리고 내리는 API 가 있다 
 호환 서버로 다룬다. 언로드만은 Strata 자신의 API 라 어느 주소든 /unload 를 보낸다 -- 드롭다운에서 strata 를
 골랐다는 것이 그 주소가 Strata 라는 뜻이다.
 
+노드의 content_mode (NSFW / SFW) 는 Strata 의 공유 설정 experimental_speed_projection, 곧 거부 성향 완화 제어 벡터의
+스위치를 바꾼다. NInfer 설정 UI 의 "거부 성향 완화 (실험)" 카드와 같은 길이고, 언로드처럼 어느 주소든 보낸다:
+  GET  /settings  {"shared": bool, "defaults": {...}}  공유 설정. POST 는 defaults 전체를 바꾸므로 읽어서 합친다.
+  POST /settings  {"defaults": {...}}  재시작 없이 모든 클라이언트에 적용되고 strata-<모델>.shared-settings.json 에 남는다.
+                  JSON 이어야 하고 다른 사이트의 Origin 이 붙어 있으면 403 -- requests 는 Origin 을 보내지 않는다.
+  GET  /metrics   {"engine": {"cvec": 0|1}}  벡터를 불러왔나. 아니면 저장만 되고 다음에 불러올 때 그 값으로 시작한다.
+벡터 자체는 그 카드가 설치한다 (--control-vector-scaled). 이미 그 자리에 있는 스위치는 다시 보내지 않는다.
+
 실측(2026-10-10, 엔진 0.1.41, qwen3.8-flash-next-iq3_xxs, RTX 5090): 생성 -> /unload -> /load -> 생성이 그대로 돌았고,
 다시 올리는 데 18초. 서버를 띄우는 것과 모델 바꾸기는 가짜 서버로만 돌려 봤다(tests/test_strata_lifecycle.py).
 """
@@ -60,6 +68,9 @@ CONFIG_PREFIX = "strata-"
 DEFAULT_MODEL_NAME = "qwen3.8-flash-next"
 _PACK_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_LOG = os.path.join(_PACK_ROOT, "strata-server.log")
+# content_mode 가 바꾸는 공유 설정 키. 설정 UI 의 거부 성향 완화 스위치와 같은 키다.
+PROJECTION_KEY = "experimental_speed_projection"
+SETTINGS_TIMEOUT_S = 5
 
 # 이 노드가 띄운 서버 프로세스. 모델을 바꿀 때 끝내도 되는 것은 이것뿐이다 -- 사용자가 창에서 띄운
 # Strata 를 여기서 죽이면 안 된다. ComfyUI 를 다시 켜면 비므로, 그 뒤로는 그 서버도 남이 띄운 것으로 본다.
@@ -130,20 +141,17 @@ class StrataBackend(OpenAICompatBackend):
         note = self.reasoning_note(req)
         if note:
             notes.append(note)
-        if not self.managed():
-            response = super()._generate(req)
-            if notes:
-                response.raw_debug = truncate_debug("\n".join(notes + [response.raw_debug]).strip())
-            return response
         started = time.time()
-        error, model_id = self._ensure_loaded(req, notes)
+        error, model_id = self._ensure_loaded(req, notes) if self.managed() else ("", "")
+        if not error:
+            if model_id:
+                req = replace(req, model=model_id)
+            error = self._apply_content_mode(req, notes)
         if error:
             return LLMResponse(
                 status=error, duration_s=time.time() - started,
                 raw_debug=truncate_debug("\n".join(notes)),
             )
-        if model_id:
-            req = replace(req, model=model_id)
         response = super()._generate(req)
         if notes:
             response.raw_debug = truncate_debug("\n".join(notes + [response.raw_debug]).strip())
@@ -282,6 +290,50 @@ class StrataBackend(OpenAICompatBackend):
             return ""
         reason = server_error_reason(resp.text or "") or f"HTTP {resp.status_code}"
         return f"error: strata - the model could not be loaded - {reason}"
+
+    # -- NSFW / SFW -------------------------------------------------------------
+
+    def _apply_content_mode(self, req: LLMRequest, notes: list) -> str:
+        """content_mode 를 Strata 의 공유 설정에 쓴다 (설정 UI 의 스위치와 같은 자리). 반환: 오류 status 또는 ""."""
+        if not req.content_mode:
+            return ""
+        import requests
+
+        want = req.content_mode == "NSFW"
+        try:
+            current = requests.get(self.base_url + "/settings", headers=self._headers(), timeout=SETTINGS_TIMEOUT_S)
+            defaults = dict((current.json() or {}).get("defaults") or {}) if current.status_code == 200 else {}
+            changed = defaults.get(PROJECTION_KEY) != want
+            if changed:
+                defaults[PROJECTION_KEY] = want
+                resp = self._post_json("/settings", {"defaults": defaults}, SETTINGS_TIMEOUT_S)
+                if resp.status_code != 200:
+                    reason = server_error_reason(resp.text or "") or f"HTTP {resp.status_code}"
+                    return f"error: strata - could not switch to {req.content_mode} - {reason}"
+        except Exception as exc:
+            return f"error: strata - could not switch to {req.content_mode} - {type(exc).__name__}"
+        if self._vector_loaded() is False:
+            notes.append(
+                f"strata: content_mode={req.content_mode} saved for the next start - the running Strata has no "
+                "control vector (install it from the NInfer config UI's Strata tab, then stop and start Strata)"
+            )
+            emit(req, f"strata: {req.content_mode} applies from the next start - no control vector loaded")
+        else:
+            notes.append(f"strata: content_mode={req.content_mode}" + ("" if changed else " (already set)"))
+        return ""
+
+    def _vector_loaded(self):
+        """떠 있는 Strata 가 제어 벡터를 불러왔나 (/metrics 의 engine.cvec). 못 물으면 None."""
+        import requests
+
+        try:
+            resp = requests.get(self.base_url + "/metrics", headers=self._headers(), timeout=SETTINGS_TIMEOUT_S)
+            data = resp.json() if resp.status_code == 200 else None
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        return str((data.get("engine") or {}).get("cvec")) not in ("0", "", "None")
 
     # -- 이 노드가 띄운 프로세스 ----------------------------------------------------
 

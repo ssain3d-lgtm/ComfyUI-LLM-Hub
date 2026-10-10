@@ -445,6 +445,8 @@ const BACKEND_ONLY = {
   // 기동 컨텍스트는 NInfer 만, 요청별 thinking 은 NInfer 와 Strata.
   ninfer_context: ["ninfer"],
   reasoning: ["ninfer", "strata"],
+  // NSFW/SFW 는 Strata 의 거부 성향 완화 스위치라 Strata 만.
+  content_mode: ["strata"],
 };
 
 // 접었을 때 숨는 위젯. 여기 없는 것 = 항상 보이는 것이다:
